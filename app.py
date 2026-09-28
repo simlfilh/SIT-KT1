@@ -28,28 +28,51 @@ if not directions:
     st.error("Не удалось получить список направлений. Проверьте доступность сайта.")
     st.stop()
 
+# ============================================================
+# НАСТРОЙКИ ПО УМОЛЧАНИЮ — меняйте здесь под себя
+# ============================================================
+DEFAULT_DIRECTION_SUBSTR = "Прикладная математика"   # подстрока в названии направления
+DEFAULT_COURSE           = "4 курс"
+DEFAULT_SEMESTER         = "6 семестр"
+DEFAULT_GROUPS_COUNT     = 2   # сколько групп выбрать по умолчанию
+# ============================================================
+
+
+def find_default_index(labels: list[str], target: str) -> int:
+    """Индекс элемента, равного target, либо 0, если не найдено."""
+    try:
+        return labels.index(target)
+    except ValueError:
+        return 0
+
+
+def find_default_index_by_substr(labels: list[str], substr: str) -> int:
+    """Индекс первого элемента, содержащего substr, либо 0."""
+    for i, lbl in enumerate(labels):
+        if substr.lower() in lbl.lower():
+            return i
+    return 0
+
+
 # ---------- 2. Выбор параметров ----------
 col1, col2, col3 = st.columns(3)
 
 with col1:
     direction_labels = [o.label for o in directions]
-    # индекс выбранного по умолчанию — первый не «Не выбрано»
-    default_dir_idx = 0
-    for i, o in enumerate(directions):
-        if "Прикладная математика" in o.label:
-            default_dir_idx = i
-            break
+    default_dir_idx = find_default_index_by_substr(direction_labels, DEFAULT_DIRECTION_SUBSTR)
     direction_label = st.selectbox("Направление", direction_labels, index=default_dir_idx)
     direction_opt = directions[direction_labels.index(direction_label)]
 
 with col2:
-    course_labels = [o.label for o in courses] or ["4 курс"]
-    course_label = st.selectbox("Курс", course_labels, index=0)
+    course_labels = [o.label for o in courses] or [DEFAULT_COURSE]
+    default_course_idx = find_default_index(course_labels, DEFAULT_COURSE)
+    course_label = st.selectbox("Курс", course_labels, index=default_course_idx)
     course_opt = next((o for o in courses if o.label == course_label), None)
 
 with col3:
-    sem_labels = [o.label for o in semesters] or ["6 семестр"]
-    sem_label = st.selectbox("Семестр", sem_labels, index=0)
+    sem_labels = [o.label for o in semesters] or [DEFAULT_SEMESTER]
+    default_sem_idx = find_default_index(sem_labels, DEFAULT_SEMESTER)
+    sem_label = st.selectbox("Семестр", sem_labels, index=default_sem_idx)
     sem_opt = next((o for o in semesters if o.label == sem_label), None)
 
 # ---------- 3. Получаем HTML с направлением и «все группы» ----------
@@ -85,7 +108,7 @@ group_options = {o.label: o for o in p.get_filter_options(html_all, "Групп�
 selected_groups = st.multiselect(
     "Группы для сравнения",
     options=group_names,
-    default=group_names[:2] if len(group_names) >= 2 else group_names,
+    default=group_names[:DEFAULT_GROUPS_COUNT],
 )
 
 if not selected_groups:
