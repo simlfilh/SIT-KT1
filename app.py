@@ -9,11 +9,26 @@ from bs4 import BeautifulSoup
 import parser as p
 
 # ============================================================
-# НАСТРОЙКИ ПО УМОЛЧАНИЮ — меняйте здесь
+# НАСТРОЙКИ ПО УМОЛЧАНИЮ
 # ============================================================
 DEFAULT_COURSE        = "4 курс"
 DEFAULT_SEMESTER      = "6 семестр"
 DEFAULT_GROUPS_COUNT  = 2
+
+# «Затравка» — известный рабочий up, чтобы получить полный HTML
+# с фильтрами «Семестр», «Группа» и т.д.
+SEED_PARAMS = {
+    "up":   "13613",   # Прикладная математика и информатика, 2023
+    "y":    "2023",
+    "k":    "1",
+    "f":    "1",
+    "s":    "6",
+    "uy":   "4",
+    "g":    "13511",   # ПМ-2301
+    "upp":  "all",
+    "sort": "fio",
+    "ball": "hide",
+}
 # ============================================================
 
 st.set_page_config(page_title="БРС СПбГЭУ — сравнение групп", layout="wide")
@@ -30,11 +45,6 @@ def find_index(labels, target, default=0):
         return default
 
 
-def is_live_direction(opt) -> bool:
-    """У опции есть uy и s — значит, это направление с рейтингом."""
-    return ("uy" in opt.params) and ("s" in opt.params) and ("up" in opt.params)
-
-
 def collect_filters(html: str):
     soup = BeautifulSoup(html, "html.parser")
     return [li.find("b").get_text(strip=True)
@@ -43,43 +53,33 @@ def collect_filters(html: str):
 
 
 # ------------------------------------------------------------
-# 1. «Затравка»: получаем HTML, из которого можно достать
-#    полноценный список направлений с up, y, uy, s.
+# 1. Затравка: получаем HTML, из которого можно взять
+#    полноценный список направлений (с up, y, uy, s)
 # ------------------------------------------------------------
-SEED_UP = "13613"   # рабочий up из вашего исходного HTML (ПМИ-2023)
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_seed_html():
-    """Первый запрос с известным рабочим up — из него получим полный HTML."""
-    return p.fetch({
-        "up": SEED_UP, "y": "2023", "k": "1", "f": "1",
-        "s": "6", "uy": "4",
-        "g": "13511", "upp": "all", "sort": "fio", "ball": "hide",
-    })
+    return p.fetch(SEED_PARAMS)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_base_html():
-    """Базовый HTML (fallback, если затравка не сработала)."""
     return p.fetch({})
 
 
-seed_html = load_seed_html()
+try:
+    seed_html = load_seed_html()
+except Exception as e:
+    st.error(f"Не удалось загрузить сайт: {e}")
+    st.stop()
 
-# Из затравки берём направления — там href уже полные
 directions = p.get_filter_options(seed_html, "Направление")
-
-# Если вдруг пусто — пробуем базовую страницу
 if not directions:
     directions = p.get_filter_options(load_base_html(), "Направление")
 
+directions = [o for o in directions if "up" in o.params]
 if not directions:
     st.error("Сайт не вернул список направлений. Попробуйте позже.")
     st.stop()
-
-# Оставляем только те, у которых есть up
-directions = [o for o in directions if "up" in o.params]
 
 with st.expander("🔍 Отладка: направления (из затравки)", expanded=False):
     for i, o in enumerate(directions):
@@ -94,6 +94,9 @@ with st.expander("🔍 Отладка: направления (из затрав
 # ------------------------------------------------------------
 # 2. Выбор направления / курса / семестра
 # ------------------------------------------------------------
+courses   = p.get_filter_options(seed_html, "Курс")
+semesters = p.get_filter_options(seed_html, "Семестр")
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -105,10 +108,6 @@ with col1:
             break
     direction_label = st.selectbox("Направление", dir_labels, index=default_dir_idx)
     direction_opt = directions[dir_labels.index(direction_label)]
-
-# Курс и семестр — статически, потому что их список зависит от направления
-courses = p.get_filter_options(seed_html, "Курс")
-semesters = p.get_filter_options(seed_html, "Семестр")
 
 with col2:
     course_labels = [o.label for o in courses] or [DEFAULT_COURSE]
@@ -126,10 +125,11 @@ with col3:
     )
     sem_opt = next((o for o in semesters if o.label == sem_label), None)
 
+
 # ------------------------------------------------------------
-# 3. Собираем рабочие параметры
+# 3. Собираем рабочие параметры из выбранного направления
 # ------------------------------------------------------------
-params = dict(dir_params)          # y, k, f, up, s, uy
+params = dict(direction_opt.params)     # здесь уже есть up, y, k, f, s, uy
 params["g"]    = "all"
 params["upp"]  = "all"
 params["sort"] = "fio"
@@ -151,11 +151,11 @@ with st.expander("🔍 Отладка: параметры запроса", expan
 # 4. Запрос — пробуем g=all, если не выйдет — без g
 # ------------------------------------------------------------
 def fetch_with_fallback(params_dict):
-    """Вернуть HTML, при котором в фильтрах есть «Группа»."""
-    for variant in (params_dict, {k: v for k, v in params_dict.items() if k != "g"}):
+    for variant in (params_dict,
+                    {k: v for k, v in params_dict.items() if k != "g"}):
         try:
             html = p.fetch(variant)
-        except Exception as e:
+        except Exception:
             continue
         if "Группа" in collect_filters(html):
             return html, variant
@@ -173,8 +173,7 @@ with st.expander("🔍 Отладка: фильтры в ответе", expanded
 if html_all is None:
     st.warning(
         "Для выбранного направления/курса/семестра сайт не отдаёт список групп. "
-        "Попробуйте другое направление — например, то, у которого в отладке "
-        "выше указан `s` и `uy`."
+        "Попробуйте другое направление в селектбоксе."
     )
     st.stop()
 
@@ -218,7 +217,6 @@ for i, gname in enumerate(selected_groups):
         continue
     params_g = dict(used_params)
     params_g.update(gopt.params)
-    # Явно фиксируем то, что не должно «слетать»
     params_g["upp"]  = "all"
     params_g["sort"] = "fio"
     params_g["ball"] = "hide"
@@ -251,7 +249,7 @@ for col in subject_shorts + ["Сумма"]:
 
 
 # ------------------------------------------------------------
-# 8. Сводка
+# 8. Сводка по группам
 # ------------------------------------------------------------
 st.subheader("Сводка по группам")
 
@@ -265,6 +263,7 @@ for gname, gdf in df.groupby("Группа"):
         "Макс.": round(gdf["Сумма"].max(), 2),
         "Мин.": round(gdf["Сумма"].min(), 2),
     })
+
 summary_df = pd.DataFrame(summary_rows).sort_values(
     "Средний суммарный балл", ascending=False
 )
