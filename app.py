@@ -87,90 +87,91 @@ with col3:
 
 
 # ------------------------------------------------------------
-# 3. Явно собираем параметры запроса для «все группы»
+# 3. Собираем параметры «базового» запроса (направление + курс)
 # ------------------------------------------------------------
-params_all = {}
+# Берём значения из опций, но с явными дефолтами
+def _pick(opt, key, default=None):
+    if opt and opt.params and key in opt.params:
+        return opt.params[key]
+    return default
 
-# берём базовые ключи из опции направления
-for key in ("y", "k", "f", "up", "uy"):
-    if key in direction_opt.params:
-        params_all[key] = direction_opt.params[key]
+# Направление: up — обязательно
+up_id = _pick(direction_opt, "up")
+if not up_id:
+    st.error("Не удалось определить ID направления. Выберите другое направление.")
+    st.stop()
 
-# курс может уточнить y
-if course_opt and "y" in course_opt.params:
-    params_all["y"] = course_opt.params["y"]
+# Год: сначала из опции курса, потом из направления
+year = _pick(course_opt, "y") or _pick(direction_opt, "y", "2023")
 
-# семестр задаёт s
-if sem_opt and "s" in sem_opt.params:
-    params_all["s"] = sem_opt.params["s"]
+# Семестр: по умолчанию 6 (для 4 курса, как в вашем HTML).
+# Если выбрали другой семестр — попробуем взять его из href.
+sem_id = _pick(sem_opt, "s", "6")
 
-# фиксированные
-params_all["g"]    = "all"
-params_all["upp"]  = "all"
-params_all["sort"] = "fio"
-params_all["ball"] = "hide"
+# uy: «уровень/курс» — берём из направления, иначе 4
+uy_id = _pick(direction_opt, "uy", "4")
 
-# отладочная панель
-with st.expander("🔍 Отладочная информация (параметры запроса)"):
-    st.write("Итоговые параметры запроса:")
-    st.json(params_all)
-    prepared = requests.Request("GET", p.BASE, params=params_all).prepare()
+params_base = {
+    "y":    year,
+    "k":    "1",
+    "f":    "1",
+    "up":   up_id,
+    "s":    sem_id,
+    "uy":   uy_id,
+    "g":    "all",       # сначала пробуем «все группы»
+    "upp":  "all",
+    "sort": "fio",
+    "ball": "hide",
+}
+
+with st.expander("🔍 Отладочная информация — базовый запрос"):
+    st.json(params_base)
+    prepared = requests.Request("GET", p.BASE, params=params_base).prepare()
     st.code(prepared.url, language="text")
 
 try:
-    html_all = p.fetch(params_all)
+    html_all = p.fetch(params_base)
 except Exception as e:
     st.error(f"Ошибка загрузки страницы: {e}")
     st.stop()
 
 
 # ------------------------------------------------------------
-# 4. Получаем список групп двумя способами
+# 4. Достаём список групп из фильтра
 # ------------------------------------------------------------
 group_options = {o.label: o for o in p.get_filter_options(html_all, "Группа")}
-group_names = [name for name in group_options.keys()
+group_names = [name for name in group_options
                if name not in ("Не выбрано", "Все группы")]
 
-# фолбэк: если g=all не дал групп — попробуем взять их из базовой страницы
+# Если групп нет — попробуем взять их, отправив запрос без g
+# (некоторые конфигурации сайта так делают)
 if not group_names:
-    with st.expander("⚠️ g=all не вернул групп. Пробуем альтернативный способ."):
-        st.write("Список фильтров, найденных в HTML от g=all:")
-        soup_dbg = BeautifulSoup(html_all, "html.parser")
-        for li in soup_dbg.select("div.filter > ul > li"):
-            b = li.find("b")
-            if b:
-                st.write(f"- '{b.get_text(strip=True)}'")
-
-        # попробуем взять группы из страницы направления без g=all,
-        # но с каким-то конкретным g — их ID видны в ссылках фильтра
-        # «Группа» на базовой странице (если направление было выбрано ранее).
-
-        # Альтернатива: пробуем для каждого направления/курса/семестра
-        # загрузить страницу, где в фильтре «Группа» есть ссылки с g=<id>
-        params_probe = dict(params_all)
-        params_probe.pop("g", None)   # без g
+    params_no_g = {k: v for k, v in params_base.items() if k != "g"}
+    with st.expander("⚠️ g=all не вернул групп — пробуем без g"):
+        prepared = requests.Request("GET", p.BASE, params=params_no_g).prepare()
+        st.code(prepared.url, language="text")
         try:
-            html_probe = p.fetch(params_probe)
-            group_options_probe = {
-                o.label: o for o in p.get_filter_options(html_probe, "Группа")
-            }
-            group_names = [name for name in group_options_probe.keys()
+            html_all = p.fetch(params_no_g)
+            group_options = {o.label: o for o in p.get_filter_options(html_all, "Группа")}
+            group_names = [name for name in group_options
                            if name not in ("Не выбрано", "Все группы")]
-            if group_names:
-                group_options = group_options_probe
-                st.success(f"Альтернативный способ сработал: найдено групп {len(group_names)}")
         except Exception as e:
-            st.warning(f"Не удалось выполнить альтернативный запрос: {e}")
+            st.warning(f"Не удалось: {e}")
 
 if not group_names:
     st.warning("В выбранном направлении не найдено ни одной группы.")
     st.info(
-        "Возможные причины: для выбранного семестра/курса групп нет, "
-        "или сайт не поддерживает параметр g=all. Проверьте отладочную панель выше."
+        "Проверьте отладочную панель: URL должен содержать up, y, k, f, s, uy. "
+        "Если какого-то параметра нет — скажите, добавим."
     )
+    # Показываем список фильтров, которые реально есть в HTML
+    soup_dbg = BeautifulSoup(html_all, "html.parser")
+    st.write("Фильтры в HTML:", [li.find("b").get_text(strip=True)
+                                 for li in soup_dbg.select("div.filter > ul > li")
+                                 if li.find("b")])
     st.stop()
 
-st.info(f"Найдено групп в направлении: **{len(group_names)}** — {', '.join(group_names)}")
+st.info(f"Найдено групп: **{len(group_names)}** — {', '.join(group_names)}")
 
 
 # ------------------------------------------------------------
@@ -189,6 +190,8 @@ if not selected_groups:
 
 # ------------------------------------------------------------
 # 6. Скачиваем данные по каждой группе
+#    (каждый раз обновляем params_base параметрами из ссылки группы —
+#     там лежат её g, uy, s, up, y)
 # ------------------------------------------------------------
 progress = st.progress(0.0, text="Загружаем данные групп...")
 all_rows = []
@@ -200,9 +203,18 @@ for i, gname in enumerate(selected_groups):
         st.warning(f"Не найдены параметры для группы {gname}")
         continue
 
-    params_g = dict(params_all)
-    params_g.update(gopt.params)   # здесь правильный g=<id>
-    # но gopt.params может содержать лишнее — гарантируем нужные ключи
+    # Начинаем с базовых параметров и накладываем на них параметры из ссылки группы
+    params_g = dict(params_base)
+    params_g.update(gopt.params)
+
+    # Гарантируем нужные значения, чтобы не проскочили «Не выбрано» и т.п.
+    params_g["g"]    = gopt.params.get("g", params_g.get("g"))
+    params_g["uy"]   = gopt.params.get("uy", params_g.get("uy"))
+    params_g["s"]    = gopt.params.get("s",  params_g.get("s"))
+    params_g["up"]   = gopt.params.get("up", params_g.get("up"))
+    params_g["y"]    = gopt.params.get("y",  params_g.get("y"))
+    params_g["k"]    = gopt.params.get("k",  params_g.get("k", "1"))
+    params_g["f"]    = gopt.params.get("f",  params_g.get("f", "1"))
     params_g["upp"]  = "all"
     params_g["sort"] = "fio"
     params_g["ball"] = "hide"
@@ -219,18 +231,9 @@ for i, gname in enumerate(selected_groups):
     rows = p.parse_students(html_g, group_name=gname)
     all_rows.extend(rows)
     progress.progress((i + 1) / len(selected_groups), text=f"Загружено: {gname}")
-    time.sleep(0.3)   # вежливость к серверу
+    time.sleep(0.3)
 
 progress.empty()
-
-if not all_rows or subject_meta is None:
-    st.error("Не удалось получить данные ни по одной группе.")
-    st.stop()
-
-df = pd.DataFrame(all_rows)
-subject_shorts = [s["short"] for s in subject_meta]
-
-
 # ------------------------------------------------------------
 # 7. Преобразование баллов в числа
 # ------------------------------------------------------------
