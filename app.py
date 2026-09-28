@@ -85,6 +85,18 @@ params_all["g"] = "all"
 
 try:
     html_all = p.fetch(params_all)
+    st.write("URL запроса:", requests.Request("GET", p.BASE, params=params_all).prepare().url)
+    st.write("Длина HTML:", len(html_all))
+
+    # Найдём блок фильтра «Группа» и посмотрим, что там
+    from bs4 import BeautifulSoup
+    soup_dbg = BeautifulSoup(html_all, "html.parser")
+    li_grp = p._find_filter(soup_dbg, "Группа")
+    if li_grp:
+        st.write("Найден фильтр «Группа». HTML блока:")
+        st.code(li_grp.prettify()[:3000], language="html")
+    else:
+        st.warning("Фильтр «Группа» НЕ найден в HTML!")
 except Exception as e:
     st.error(f"Ошибка загрузки страницы: {e}")
     st.stop()
