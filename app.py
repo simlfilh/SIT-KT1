@@ -9,216 +9,198 @@ from bs4 import BeautifulSoup
 import parser as p
 
 # ============================================================
-# НАСТРОЙКИ ПО УМОЛЧАНИЮ — меняйте здесь под себя
+# НАСТРОЙКИ ПО УМОЛЧАНИЮ — меняйте здесь
 # ============================================================
-DEFAULT_DIRECTION_SUBSTR = "Прикладная математика"
-DEFAULT_COURSE           = "4 курс"
-DEFAULT_SEMESTER         = "6 семестр"
-DEFAULT_GROUPS_COUNT     = 2   # сколько групп выбрать по умолчанию
+DEFAULT_COURSE        = "4 курс"
+DEFAULT_SEMESTER      = "6 семестр"
+DEFAULT_GROUPS_COUNT  = 2
 # ============================================================
 
 st.set_page_config(page_title="БРС СПбГЭУ — сравнение групп", layout="wide")
-
 st.title("📊 Сравнение успеваемости групп — БРС СПбГЭУ")
 
 
 # ------------------------------------------------------------
-# Утилиты для дефолтных значений
+# Вспомогательные функции
 # ------------------------------------------------------------
-def find_default_index(labels, target):
+def find_index(labels, target, default=0):
     try:
         return labels.index(target)
     except ValueError:
-        return 0
+        return default
 
 
-def find_default_index_by_substr(labels, substr):
-    for i, lbl in enumerate(labels):
-        if substr.lower() in lbl.lower():
-            return i
-    return 0
+def is_live_direction(opt) -> bool:
+    """У опции есть uy и s — значит, это направление с рейтингом."""
+    return ("uy" in opt.params) and ("s" in opt.params) and ("up" in opt.params)
+
+
+def collect_filters(html: str):
+    soup = BeautifulSoup(html, "html.parser")
+    return [li.find("b").get_text(strip=True)
+            for li in soup.select("div.filter > ul > li")
+            if li.find("b")]
 
 
 # ------------------------------------------------------------
-# 1. Загрузка базовой страницы и фильтров
+# 1. Базовая страница — из неё берём список направлений
 # ------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_base_html():
     return p.fetch({})
 
 
-try:
-    base_html = load_base_html()
-except Exception as e:
-    st.error(f"Не удалось загрузить сайт: {e}")
+base_html = load_base_html()
+all_directions = p.get_filter_options(base_html, "Направление")
+
+if not all_directions:
+    st.error("Сайт не вернул список направлений. Попробуйте позже.")
     st.stop()
 
-directions = p.get_filter_options(base_html, "Направление")
-with st.expander("🔍 Все направления (для отладки)"):
-    for i, o in enumerate(directions):
-        up_id = o.params.get("up", "?")
-        st.write(f"{i}: up={up_id} — {o.label}")
-semesters  = p.get_filter_options(base_html, "Семестр")
-courses    = p.get_filter_options(base_html, "Курс")
-
-if not directions:
-    st.error("Не удалось получить список направлений. Проверьте доступность сайта.")
+# Оставляем только «живые» направления
+live_directions = [o for o in all_directions if is_live_direction(o)]
+if not live_directions:
+    st.error("Нет ни одного направления с полными параметрами (uy, s, up).")
     st.stop()
+
+with st.expander("🔍 Отладка: направления", expanded=False):
+    st.write("**Все опции:**")
+    for i, o in enumerate(all_directions):
+        st.write(f"{i}: up={o.params.get('up','?')}, "
+                 f"y={o.params.get('y','?')}, "
+                 f"uy={o.params.get('uy','?')}, "
+                 f"s={o.params.get('s','?')} — {o.label}")
+    st.write(f"\n**«Живых» направлений: {len(live_directions)}**")
 
 
 # ------------------------------------------------------------
-# 2. Выбор параметров
+# 2. Выбор направления / курса / семестра
 # ------------------------------------------------------------
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    direction_labels = [o.label for o in directions]
-    default_dir_idx = find_default_index_by_substr(direction_labels, DEFAULT_DIRECTION_SUBSTR)
-    direction_label = st.selectbox("Направление", direction_labels, index=default_dir_idx)
-    direction_opt = directions[direction_labels.index(direction_label)]
+    dir_labels = [o.label for o in live_directions]
+    # Дефолт — первое направление, в названии которого есть «Прикладная математика»
+    default_dir_idx = 0
+    for i, lbl in enumerate(dir_labels):
+        if "прикладная математика" in lbl.lower():
+            default_dir_idx = i
+            break
+    direction_label = st.selectbox("Направление", dir_labels, index=default_dir_idx)
+    direction_opt = live_directions[dir_labels.index(direction_label)]
 
+# Из опции направления достаём y, k, f, up, s, uy — они все там есть
+dir_params = dict(direction_opt.params)
+
+# Список курсов зависит от направления — но проще взять с базовой страницы
+courses = p.get_filter_options(base_html, "Курс")
 with col2:
     course_labels = [o.label for o in courses] or [DEFAULT_COURSE]
-    default_course_idx = find_default_index(course_labels, DEFAULT_COURSE)
-    course_label = st.selectbox("Курс", course_labels, index=default_course_idx)
+    course_label = st.selectbox("Курс", course_labels,
+                                 index=find_index(course_labels, DEFAULT_COURSE))
     course_opt = next((o for o in courses if o.label == course_label), None)
 
+semesters = p.get_filter_options(base_html, "Семестр")
 with col3:
     sem_labels = [o.label for o in semesters] or [DEFAULT_SEMESTER]
-    default_sem_idx = find_default_index(sem_labels, DEFAULT_SEMESTER)
-    sem_label = st.selectbox("Семестр", sem_labels, index=default_sem_idx)
+    sem_label = st.selectbox("Семестр", sem_labels,
+                             index=find_index(sem_labels, DEFAULT_SEMESTER))
     sem_opt = next((o for o in semesters if o.label == sem_label), None)
 
 
 # ------------------------------------------------------------
-# 3. Собираем параметры «базового» запроса (направление + курс)
+# 3. Собираем рабочие параметры
 # ------------------------------------------------------------
-# Берём значения из опций, но с явными дефолтами
-def _pick(opt, key, default=None):
-    if opt and opt.params and key in opt.params:
-        return opt.params[key]
-    return default
+params = dict(dir_params)          # y, k, f, up, s, uy
+params["g"]    = "all"
+params["upp"]  = "all"
+params["sort"] = "fio"
+params["ball"] = "hide"
 
-# Направление: up — обязательно
-up_id = _pick(direction_opt, "up")
-if not up_id:
-    st.error("Не удалось определить ID направления. Выберите другое направление.")
-    st.stop()
+# Накладываем выбранный курс (может поменять y) и семестр (поменяет s)
+if course_opt and "y" in course_opt.params:
+    params["y"] = course_opt.params["y"]
+if sem_opt and "s" in sem_opt.params:
+    params["s"] = sem_opt.params["s"]
 
-# Год: сначала из опции курса, потом из направления
-year = _pick(course_opt, "y") or _pick(direction_opt, "y", "2023")
-
-# Семестр: по умолчанию 6 (для 4 курса, как в вашем HTML).
-# Если выбрали другой семестр — попробуем взять его из href.
-sem_id = _pick(sem_opt, "s", "6")
-
-# uy: «уровень/курс» — берём из направления, иначе 4
-uy_id = _pick(direction_opt, "uy", "4")
-
-params_base = {
-    "y":    year,
-    "k":    "1",
-    "f":    "1",
-    "up":   up_id,
-    "s":    sem_id,
-    "uy":   uy_id,
-    "g":    "all",       # сначала пробуем «все группы»
-    "upp":  "all",
-    "sort": "fio",
-    "ball": "hide",
-}
-
-with st.expander("🔍 Отладочная информация — базовый запрос"):
-    st.json(params_base)
-    prepared = requests.Request("GET", p.BASE, params=params_base).prepare()
+with st.expander("🔍 Отладка: параметры запроса", expanded=True):
+    st.json(params)
+    prepared = requests.Request("GET", p.BASE, params=params).prepare()
     st.code(prepared.url, language="text")
 
-try:
-    html_all = p.fetch(params_base)
-except Exception as e:
-    st.error(f"Ошибка загрузки страницы: {e}")
+
+# ------------------------------------------------------------
+# 4. Запрос — пробуем g=all, если не выйдет — без g
+# ------------------------------------------------------------
+def fetch_with_fallback(params_dict):
+    """Вернуть HTML, при котором в фильтрах есть «Группа»."""
+    for variant in (params_dict, {k: v for k, v in params_dict.items() if k != "g"}):
+        try:
+            html = p.fetch(variant)
+        except Exception as e:
+            continue
+        if "Группа" in collect_filters(html):
+            return html, variant
+    return None, None
+
+
+html_all, used_params = fetch_with_fallback(params)
+
+with st.expander("🔍 Отладка: фильтры в ответе", expanded=True):
+    if html_all:
+        st.write(collect_filters(html_all))
+    else:
+        st.error("Сайт не вернул страницу с фильтром «Группа».")
+
+if html_all is None:
+    st.warning(
+        "Для выбранного направления/курса/семестра сайт не отдаёт список групп. "
+        "Попробуйте другое направление — например, то, у которого в отладке "
+        "выше указан `s` и `uy`."
+    )
     st.stop()
 
 
 # ------------------------------------------------------------
-# 4. Достаём список групп из фильтра
+# 5. Достаём группы
 # ------------------------------------------------------------
 group_options = {o.label: o for o in p.get_filter_options(html_all, "Группа")}
-group_names = [name for name in group_options
-               if name not in ("Не выбрано", "Все группы")]
-
-# Если групп нет — попробуем взять их, отправив запрос без g
-# (некоторые конфигурации сайта так делают)
-if not group_names:
-    params_no_g = {k: v for k, v in params_base.items() if k != "g"}
-    with st.expander("⚠️ g=all не вернул групп — пробуем без g"):
-        prepared = requests.Request("GET", p.BASE, params=params_no_g).prepare()
-        st.code(prepared.url, language="text")
-        try:
-            html_all = p.fetch(params_no_g)
-            group_options = {o.label: o for o in p.get_filter_options(html_all, "Группа")}
-            group_names = [name for name in group_options
-                           if name not in ("Не выбрано", "Все группы")]
-        except Exception as e:
-            st.warning(f"Не удалось: {e}")
+group_names = [n for n in group_options if n not in ("Не выбрано", "Все группы")]
 
 if not group_names:
-    st.warning("В выбранном направлении не найдено ни одной группы.")
-    st.info(
-        "Проверьте отладочную панель: URL должен содержать up, y, k, f, s, uy. "
-        "Если какого-то параметра нет — скажите, добавим."
-    )
-    # Показываем список фильтров, которые реально есть в HTML
-    soup_dbg = BeautifulSoup(html_all, "html.parser")
-    st.write("Фильтры в HTML:", [li.find("b").get_text(strip=True)
-                                 for li in soup_dbg.select("div.filter > ul > li")
-                                 if li.find("b")])
+    st.warning("Фильтр «Группа» есть, но список групп пуст.")
     st.stop()
 
 st.info(f"Найдено групп: **{len(group_names)}** — {', '.join(group_names)}")
 
 
 # ------------------------------------------------------------
-# 5. Мультивыбор групп
+# 6. Мультивыбор групп
 # ------------------------------------------------------------
 selected_groups = st.multiselect(
     "Группы для сравнения",
     options=group_names,
     default=group_names[:DEFAULT_GROUPS_COUNT],
 )
-
 if not selected_groups:
     st.warning("Выберите хотя бы одну группу.")
     st.stop()
 
 
 # ------------------------------------------------------------
-# 6. Скачиваем данные по каждой группе
-#    (каждый раз обновляем params_base параметрами из ссылки группы —
-#     там лежат её g, uy, s, up, y)
+# 7. Скачиваем данные по каждой группе
 # ------------------------------------------------------------
-progress = st.progress(0.0, text="Загружаем данные групп...")
+progress = st.progress(0.0, text="Загружаем данные групп…")
 all_rows = []
 subject_meta = None
 
 for i, gname in enumerate(selected_groups):
     gopt = group_options.get(gname)
     if not gopt:
-        st.warning(f"Не найдены параметры для группы {gname}")
         continue
-
-    # Начинаем с базовых параметров и накладываем на них параметры из ссылки группы
-    params_g = dict(params_base)
+    params_g = dict(used_params)
     params_g.update(gopt.params)
-
-    # Гарантируем нужные значения, чтобы не проскочили «Не выбрано» и т.п.
-    params_g["g"]    = gopt.params.get("g", params_g.get("g"))
-    params_g["uy"]   = gopt.params.get("uy", params_g.get("uy"))
-    params_g["s"]    = gopt.params.get("s",  params_g.get("s"))
-    params_g["up"]   = gopt.params.get("up", params_g.get("up"))
-    params_g["y"]    = gopt.params.get("y",  params_g.get("y"))
-    params_g["k"]    = gopt.params.get("k",  params_g.get("k", "1"))
-    params_g["f"]    = gopt.params.get("f",  params_g.get("f", "1"))
+    # Явно фиксируем то, что не должно «слетать»
     params_g["upp"]  = "all"
     params_g["sort"] = "fio"
     params_g["ball"] = "hide"
@@ -226,44 +208,48 @@ for i, gname in enumerate(selected_groups):
     try:
         html_g = p.fetch(params_g)
     except Exception as e:
-        st.warning(f"Не удалось загрузить группу {gname}: {e}")
+        st.warning(f"Не удалось загрузить {gname}: {e}")
         continue
 
     if subject_meta is None:
         subject_meta = p.parse_subjects(html_g)
 
-    rows = p.parse_students(html_g, group_name=gname)
-    all_rows.extend(rows)
+    all_rows.extend(p.parse_students(html_g, group_name=gname))
     progress.progress((i + 1) / len(selected_groups), text=f"Загружено: {gname}")
     time.sleep(0.3)
 
 progress.empty()
-# ------------------------------------------------------------
-# 7. Преобразование баллов в числа
-# ------------------------------------------------------------
+
+if not all_rows or subject_meta is None:
+    st.error("Данные не получены.")
+    st.stop()
+
+df = pd.DataFrame(all_rows)
+subject_shorts = [s["short"] for s in subject_meta]
+
 for col in subject_shorts + ["Сумма"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col].replace("", pd.NA), errors="coerce")
 
 
 # ------------------------------------------------------------
-# 8. Сводка по группам
+# 8. Сводка
 # ------------------------------------------------------------
 st.subheader("Сводка по группам")
 
-summary = []
+summary_rows = []
 for gname, gdf in df.groupby("Группа"):
-    summary.append({
+    summary_rows.append({
         "Группа": gname,
         "Студентов": len(gdf),
         "Средний суммарный балл": round(gdf["Сумма"].mean(), 2),
-        "Медиана суммарного балла": round(gdf["Сумма"].median(), 2),
-        "Макс. балл": round(gdf["Сумма"].max(), 2),
-        "Мин. балл": round(gdf["Сумма"].min(), 2),
-        "Пустых оценок": int(gdf[subject_shorts].isna().sum().sum()),
+        "Медиана": round(gdf["Сумма"].median(), 2),
+        "Макс.": round(gdf["Сумма"].max(), 2),
+        "Мин.": round(gdf["Сумма"].min(), 2),
     })
-
-summary_df = pd.DataFrame(summary).sort_values("Средний суммарный балл", ascending=False)
+summary_df = pd.DataFrame(summary_rows).sort_values(
+    "Средний суммарный балл", ascending=False
+)
 st.dataframe(summary_df, use_container_width=True)
 
 
@@ -273,70 +259,45 @@ st.dataframe(summary_df, use_container_width=True)
 col_a, col_b = st.columns(2)
 
 with col_a:
-    fig1 = px.bar(
-        summary_df, x="Группа", y="Средний суммарный балл",
-        text="Средний суммарный балл",
-        title="Средний суммарный балл по группам",
-        color="Группа",
-    )
+    fig1 = px.bar(summary_df, x="Группа", y="Средний суммарный балл",
+                  text="Средний суммарный балл", color="Группа",
+                  title="Средний суммарный балл по группам")
     fig1.update_traces(textposition="outside")
     fig1.update_layout(showlegend=False, height=420)
     st.plotly_chart(fig1, use_container_width=True)
 
 with col_b:
-    fig2 = px.box(
-        df, x="Группа", y="Сумма", color="Группа", points="all",
-        title="Распределение суммарного балла",
-    )
+    fig2 = px.box(df, x="Группа", y="Сумма", color="Группа", points="all",
+                  title="Распределение суммарного балла")
     fig2.update_layout(showlegend=False, height=420)
     st.plotly_chart(fig2, use_container_width=True)
 
 
-# ------------------------------------------------------------
-# 10. Сравнение по предметам
-# ------------------------------------------------------------
 st.subheader("Средний балл по предметам")
-
-subj_means = (
-    df.groupby("Группа")[subject_shorts]
-    .mean()
-    .round(2)
-    .reset_index()
-)
-
+subj_means = df.groupby("Группа")[subject_shorts].mean().round(2).reset_index()
 fig3 = px.bar(
     subj_means.melt(id_vars="Группа", var_name="Предмет", value_name="Средний балл"),
     x="Предмет", y="Средний балл", color="Группа", barmode="group",
-    title="Средний балл по предметам в разрезе групп",
+    title="Средний балл по предметам",
 )
 fig3.update_layout(height=500)
 st.plotly_chart(fig3, use_container_width=True)
-
 st.dataframe(subj_means, use_container_width=True)
 
 
 # ------------------------------------------------------------
-# 11. Полная таблица
+# 10. Полная таблица и экспорт
 # ------------------------------------------------------------
 with st.expander("📋 Полная таблица студентов"):
     st.dataframe(df, use_container_width=True)
 
-
-# ------------------------------------------------------------
-# 12. Экспорт
-# ------------------------------------------------------------
 st.subheader("Экспорт")
-
 col_x, col_y = st.columns(2)
 
 with col_x:
     csv_bytes = df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        "⬇️ Скачать студентов (CSV)",
-        data=csv_bytes,
-        file_name="students_compare.csv",
-        mime="text/csv",
-    )
+    st.download_button("⬇️ Скачать CSV", data=csv_bytes,
+                       file_name="students_compare.csv", mime="text/csv")
 
 with col_y:
     buf = io.BytesIO()
@@ -344,9 +305,6 @@ with col_y:
         df.to_excel(writer, sheet_name="Студенты", index=False)
         summary_df.to_excel(writer, sheet_name="Сводка", index=False)
         subj_means.to_excel(writer, sheet_name="По предметам", index=False)
-    st.download_button(
-        "⬇️ Скачать Excel (3 листа)",
-        data=buf.getvalue(),
-        file_name="students_compare.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    st.download_button("⬇️ Скачать Excel", data=buf.getvalue(),
+                       file_name="students_compare.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
