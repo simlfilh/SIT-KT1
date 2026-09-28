@@ -54,6 +54,10 @@ except Exception as e:
     st.stop()
 
 directions = p.get_filter_options(base_html, "Направление")
+with st.expander("🔍 Все направления (для отладки)"):
+    for i, o in enumerate(directions):
+        up_id = o.params.get("up", "?")
+        st.write(f"{i}: up={up_id} — {o.label}")
 semesters  = p.get_filter_options(base_html, "Семестр")
 courses    = p.get_filter_options(base_html, "Курс")
 
