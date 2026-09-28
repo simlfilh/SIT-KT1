@@ -43,34 +43,52 @@ def collect_filters(html: str):
 
 
 # ------------------------------------------------------------
-# 1. Базовая страница — из неё берём список направлений
+# 1. «Затравка»: получаем HTML, из которого можно достать
+#    полноценный список направлений с up, y, uy, s.
 # ------------------------------------------------------------
+SEED_UP = "13613"   # рабочий up из вашего исходного HTML (ПМИ-2023)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_seed_html():
+    """Первый запрос с известным рабочим up — из него получим полный HTML."""
+    return p.fetch({
+        "up": SEED_UP, "y": "2023", "k": "1", "f": "1",
+        "s": "6", "uy": "4",
+        "g": "13511", "upp": "all", "sort": "fio", "ball": "hide",
+    })
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_base_html():
+    """Базовый HTML (fallback, если затравка не сработала)."""
     return p.fetch({})
 
 
-base_html = load_base_html()
-all_directions = p.get_filter_options(base_html, "Направление")
+seed_html = load_seed_html()
 
-if not all_directions:
+# Из затравки берём направления — там href уже полные
+directions = p.get_filter_options(seed_html, "Направление")
+
+# Если вдруг пусто — пробуем базовую страницу
+if not directions:
+    directions = p.get_filter_options(load_base_html(), "Направление")
+
+if not directions:
     st.error("Сайт не вернул список направлений. Попробуйте позже.")
     st.stop()
 
-# Оставляем только «живые» направления
-live_directions = [o for o in all_directions if is_live_direction(o)]
-if not live_directions:
-    st.error("Нет ни одного направления с полными параметрами (uy, s, up).")
-    st.stop()
+# Оставляем только те, у которых есть up
+directions = [o for o in directions if "up" in o.params]
 
-with st.expander("🔍 Отладка: направления", expanded=False):
-    st.write("**Все опции:**")
-    for i, o in enumerate(all_directions):
-        st.write(f"{i}: up={o.params.get('up','?')}, "
-                 f"y={o.params.get('y','?')}, "
-                 f"uy={o.params.get('uy','?')}, "
-                 f"s={o.params.get('s','?')} — {o.label}")
-    st.write(f"\n**«Живых» направлений: {len(live_directions)}**")
+with st.expander("🔍 Отладка: направления (из затравки)", expanded=False):
+    for i, o in enumerate(directions):
+        st.write(
+            f"{i}: up=`{o.params.get('up','?')}` "
+            f"y=`{o.params.get('y','?')}` "
+            f"uy=`{o.params.get('uy','?')}` "
+            f"s=`{o.params.get('s','?')}` — {o.label}"
+        )
 
 
 # ------------------------------------------------------------
@@ -79,34 +97,34 @@ with st.expander("🔍 Отладка: направления", expanded=False):
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    dir_labels = [o.label for o in live_directions]
-    # Дефолт — первое направление, в названии которого есть «Прикладная математика»
+    dir_labels = [o.label for o in directions]
     default_dir_idx = 0
     for i, lbl in enumerate(dir_labels):
         if "прикладная математика" in lbl.lower():
             default_dir_idx = i
             break
     direction_label = st.selectbox("Направление", dir_labels, index=default_dir_idx)
-    direction_opt = live_directions[dir_labels.index(direction_label)]
+    direction_opt = directions[dir_labels.index(direction_label)]
 
-# Из опции направления достаём y, k, f, up, s, uy — они все там есть
-dir_params = dict(direction_opt.params)
+# Курс и семестр — статически, потому что их список зависит от направления
+courses = p.get_filter_options(seed_html, "Курс")
+semesters = p.get_filter_options(seed_html, "Семестр")
 
-# Список курсов зависит от направления — но проще взять с базовой страницы
-courses = p.get_filter_options(base_html, "Курс")
 with col2:
     course_labels = [o.label for o in courses] or [DEFAULT_COURSE]
-    course_label = st.selectbox("Курс", course_labels,
-                                 index=find_index(course_labels, DEFAULT_COURSE))
+    course_label = st.selectbox(
+        "Курс", course_labels,
+        index=find_index(course_labels, DEFAULT_COURSE),
+    )
     course_opt = next((o for o in courses if o.label == course_label), None)
 
-semesters = p.get_filter_options(base_html, "Семестр")
 with col3:
     sem_labels = [o.label for o in semesters] or [DEFAULT_SEMESTER]
-    sem_label = st.selectbox("Семестр", sem_labels,
-                             index=find_index(sem_labels, DEFAULT_SEMESTER))
+    sem_label = st.selectbox(
+        "Семестр", sem_labels,
+        index=find_index(sem_labels, DEFAULT_SEMESTER),
+    )
     sem_opt = next((o for o in semesters if o.label == sem_label), None)
-
 
 # ------------------------------------------------------------
 # 3. Собираем рабочие параметры
