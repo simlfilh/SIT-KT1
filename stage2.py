@@ -4,27 +4,20 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
-
 import parser as p
 
-st.title("👤 Этап 2 — Сравнение студента с однокурсником")
+st.title("📊 Этап 2 — Сравнение студента с однокурсником")
 
 
-# ============================================================
-# ГОДЫ
-# ============================================================
 YEARS = {
     "2026 (1 курс)": "2026",
     "2025 (2 курс)": "2025",
     "2024 (3 курс)": "2024",
     "2023 (4 курс)": "2023",
 }
-# ============================================================
 
 
-# ------------------------------------------------------------
 # Утилиты
-# ------------------------------------------------------------
 def try_fetch(params_list):
     for params in params_list:
         try:
@@ -79,7 +72,6 @@ def load_group_html(up_id: str, year: str, g_id: str, s_id: str):
 
 
 def parse_group(up_id, year, g_id, s_id, group_name):
-    """Скачивает и парсит группу в семестре. Возвращает df + meta предметов."""
     html = load_group_html(up_id, year, g_id, s_id)
     meta = p.parse_subjects(html)
     rows = p.parse_students(html, group_name=group_name)
@@ -87,9 +79,7 @@ def parse_group(up_id, year, g_id, s_id, group_name):
     return df, meta
 
 
-# ------------------------------------------------------------
-# 1. Выбор курса и направления
-# ------------------------------------------------------------
+# Выбор курса и направления
 col1, col2 = st.columns(2)
 
 with col1:
@@ -98,27 +88,14 @@ with col1:
 
 with col2:
     directions = load_directions_for_year(year)
-    if not directions:
-        st.warning("Не удалось получить направления.")
-        st.stop()
     dir_labels = [o.label for o in directions]
     direction_label = st.selectbox("Направление", dir_labels, key="s2_dir")
     direction_opt = directions[dir_labels.index(direction_label)]
     up_id = direction_opt.params["up"]
 
 
-# ------------------------------------------------------------
-# 2. Группы и семестры направления
-# ------------------------------------------------------------
+# Группы и семестры направления
 html_dir, groups, sems = load_groups_and_sems(up_id, year)
-
-if not groups:
-    st.warning("Для выбранного направления и года нет групп.")
-    st.stop()
-
-if not sems:
-    st.warning("Сайт не вернул список семестров для направления.")
-    st.stop()
 
 group_options = {o.label: o for o in groups}
 group_names = list(group_options.keys())
@@ -128,9 +105,7 @@ current_sem = p.get_selected_text(html_dir, "Семестр")
 default_sem_idx = sem_labels.index(current_sem) if current_sem in sem_labels else len(sem_labels) - 1
 
 
-# ------------------------------------------------------------
-# 3. Выбор семестра для сравнения
-# ------------------------------------------------------------
+# Выбор семестра для сравнения
 sem_label = st.selectbox(
     "Семестр для сравнения",
     options=sem_labels,
@@ -140,10 +115,8 @@ sem_label = st.selectbox(
 s_id = sem_options[sem_label].params.get("s")
 
 
-# ------------------------------------------------------------
-# 4. Выбор «Я» — группа + студент
-# ------------------------------------------------------------
-st.markdown("### 👤 Я")
+# Выбор группы и студента №1
+st.markdown("🧑‍🎓 Однокурсник №1")
 
 col_my_grp, col_me = st.columns(2)
 
@@ -157,16 +130,11 @@ with col_me:
         df_my, meta_my = parse_group(up_id, year, my_g_id, s_id, my_group)
 
     my_students = df_my["ФИО"].dropna().tolist()
-    if not my_students:
-        st.error("В моей группе нет студентов.")
-        st.stop()
     me_name = st.selectbox("Я", my_students, key="s2_me")
 
 
-# ------------------------------------------------------------
-# 5. Выбор «Другой» — группа + студент
-# ------------------------------------------------------------
-st.markdown("### 🧑‍🎓 С кем сравнить")
+# Выбор группы и студента №2
+st.markdown("👤 Однокурсник №2")
 
 col_other_grp, col_other = st.columns(2)
 
@@ -192,7 +160,6 @@ with col_other:
     if not other_students:
         st.error("В группе однокурсника нет студентов.")
         st.stop()
-    # По умолчанию — первый, кто не «я»
     other_default = next((s for s in other_students if s != me_name), other_students[0])
     other_default_idx = other_students.index(other_default)
     other_name = st.selectbox(
@@ -200,9 +167,7 @@ with col_other:
     )
 
 
-# ------------------------------------------------------------
-# 6. Готовим данные для сравнения
-# ------------------------------------------------------------
+# Готовим данные для сравнения
 # Все предметы из обеих групп (объединение)
 subject_shorts = sorted(set([s["short"] for s in meta_my] + [s["short"] for s in meta_other]))
 meta_by_short = {}
@@ -253,9 +218,7 @@ for subj in subject_shorts:
 cmp_df = pd.DataFrame(comparison_rows)
 
 
-# ------------------------------------------------------------
-# 7. Сводные метрики
-# ------------------------------------------------------------
+# Сводные метрики оценки успеваемости
 st.subheader("Сводка")
 
 my_sum = row_me.get("Сумма", pd.NA)
@@ -275,9 +238,7 @@ c3.metric("Мой средний по общим", f"{my_avg:.2f}")
 c4.metric("Его средний по общим", f"{ot_avg:.2f}", delta=f"{my_avg - ot_avg:+.2f}")
 
 
-# ------------------------------------------------------------
-# 8. Таблица по предметам
-# ------------------------------------------------------------
+# Таблица по предметам
 st.subheader("Сравнение по предметам")
 st.dataframe(
     cmp_df.style.apply(
@@ -293,9 +254,7 @@ st.dataframe(
 )
 
 
-# ------------------------------------------------------------
-# 9. Место в группе
-# ------------------------------------------------------------
+# Место в группе
 st.subheader("Место в группе")
 
 # По сумме баллов в текущем семестре
@@ -314,20 +273,18 @@ pos_ot, total_ot = place_in(df_other, other_name)
 c1, c2 = st.columns(2)
 with c1:
     if pos_me:
-        st.metric(f"Я в группе «{my_group}»", f"{pos_me} / {total_my}",
+        st.metric(f"Однокурсник №1 в группе «{my_group}»", f"{pos_me} / {total_my}",
                   delta=f"из {total_my} студентов")
 with c2:
     if pos_ot:
-        st.metric(f"Он/Она в группе «{other_group}»", f"{pos_ot} / {total_ot}",
+        st.metric(f"Однокурсник №2 в группе «{other_group}»", f"{pos_ot} / {total_ot}",
                   delta=f"из {total_ot} студентов")
 
 
-# ------------------------------------------------------------
-# 10. Графики
-# ------------------------------------------------------------
+# Графики
 st.subheader("Графики сравнения")
 
-# 10.1 Столбики: я / он / средний по группе
+# Столбики: Однокурсник №1 / Однокурсник №2 / средний по группе
 avg_my = df_my.groupby("Группа")[subject_shorts].mean().mean().round(2) \
     if not df_my.empty else pd.Series()
 avg_ot = df_other.groupby("Группа")[subject_shorts].mean().mean().round(2) \
@@ -337,12 +294,12 @@ avg_by_subj_ot = df_other[subject_shorts].mean().round(2)
 
 fig_bar = go.Figure()
 fig_bar.add_trace(go.Bar(
-    name="Я", x=subject_shorts,
+    name="Однокурсник №1", x=subject_shorts,
     y=[row_me.get(s, None) if pd.notna(row_me.get(s, None)) else 0 for s in subject_shorts],
     marker_color="#2E86DE",
 ))
 fig_bar.add_trace(go.Bar(
-    name="Он/Она", x=subject_shorts,
+    name="Однокурсник №2", x=subject_shorts,
     y=[row_other.get(s, None) if pd.notna(row_other.get(s, None)) else 0 for s in subject_shorts],
     marker_color="#EE5A24",
 ))
@@ -364,18 +321,18 @@ fig_bar.update_layout(
 st.plotly_chart(fig_bar, use_container_width=True)
 
 
-# 10.2 Radar
+# Radar
 fig_radar = go.Figure()
 fig_radar.add_trace(go.Scatterpolar(
     r=[row_me.get(s, 0) or 0 for s in subject_shorts],
     theta=subject_shorts,
-    fill="toself", name="Я",
+    fill="toself", name="Однокурсник №1",
     line_color="#2E86DE",
 ))
 fig_radar.add_trace(go.Scatterpolar(
     r=[row_other.get(s, 0) or 0 for s in subject_shorts],
     theta=subject_shorts,
-    fill="toself", name="Он/Она",
+    fill="toself", name="Однокурсник №2",
     line_color="#EE5A24",
 ))
 fig_radar.update_layout(
@@ -385,23 +342,8 @@ fig_radar.update_layout(
 )
 st.plotly_chart(fig_radar, use_container_width=True)
 
-# ------------------------------------------------------------
-# 12. Экспорт
-# ------------------------------------------------------------
-st.subheader("Экспорт")
 
-csv_bytes = cmp_df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-st.download_button(
-    "⬇️ Скачать сравнение (CSV)",
-    data=csv_bytes,
-    file_name=f"compare_{me_name}_vs_{other_name}.csv".replace(" ", "_"),
-    mime="text/csv",
-)
-
-
-# ------------------------------------------------------------
-# 13. Отладка
-# ------------------------------------------------------------
+# Отладка
 with st.expander("🔍 Отладка"):
     st.write("up:", up_id, "| year:", year, "| semester:", s_id)
     st.write("Моя группа:", my_group, "| g_id:", my_g_id)
