@@ -290,19 +290,18 @@ sem_for_subjects = st.selectbox(
 
 df_sem = df[df["Семестр"] == sem_for_subjects].copy()
 
-# Определяем список предметов ИМЕННО этого семестра:
-# берём все колонки df_sem и выкидываем служебные.
+# Служебные колонки, которые не являются предметами
 SERVICE_COLS = {"Группа", "№", "ФИО", "stud_id", "Сумма", "Семестр"}
-subjects_this_sem = [
-    c for c in df_sem.columns
-    if c not in SERVICE_COLS
-]
 
-# Оставляем только те, где есть хоть одно числовое значение
-subjects_this_sem = [
-    c for c in subjects_this_sem
-    if df_sem[c].notna().any()
-]
+# Приводим к числам ВСЕ колонки df_sem, кроме служебных.
+# Пустые/нечисловые значения станут NaN и не помешают mean().
+subject_candidates = [c for c in df_sem.columns if c not in SERVICE_COLS]
+
+for c in subject_candidates:
+    df_sem[c] = pd.to_numeric(df_sem[c], errors="coerce")
+
+# Оставляем только те колонки, где есть хоть одно число
+subjects_this_sem = [c for c in subject_candidates if df_sem[c].notna().any()]
 
 if not subjects_this_sem:
     st.info(f"В {sem_for_subjects} нет данных по предметам.")
@@ -325,16 +324,12 @@ else:
     st.plotly_chart(fig3, use_container_width=True)
     st.dataframe(subj_means, use_container_width=True)
 
-    # Расшифровка предметов именно для этого семестра
-    # (subject_meta собиралась для первой группы/семестра — она может не совпадать)
     with st.expander("ℹ️ Расшифровка предметов этого семестра"):
-        # Пытаемся найти расшифровки в общем subject_meta по совпадению short
         meta_by_short = {s["short"]: s["full"] for s in (subject_meta or [])}
         for short in subjects_this_sem:
             full = meta_by_short.get(short, "")
             st.write(f"**{short}** — {full}" if full else f"**{short}**")
-
-
+            
 # ------------------------------------------------------------
 # 10. Полная таблица и экспорт
 # ------------------------------------------------------------
