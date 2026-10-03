@@ -282,29 +282,57 @@ if len(selected_sems) > 1:
 # ------------------------------------------------------------
 st.subheader("Средний балл по предметам")
 
-# Выбор семестра для сравнения по предметам
 sem_for_subjects = st.selectbox(
     "Семестр для сравнения по предметам",
     options=selected_sems,
     index=len(selected_sems) - 1,
 )
-df_sem = df[df["Семестр"] == sem_for_subjects]
 
-subj_means = (
-    df_sem.groupby("Группа")[subject_shorts]
-    .mean()
-    .round(2)
-    .reset_index()
-)
+df_sem = df[df["Семестр"] == sem_for_subjects].copy()
 
-fig3 = px.bar(
-    subj_means.melt(id_vars="Группа", var_name="Предмет", value_name="Средний балл"),
-    x="Предмет", y="Средний балл", color="Группа", barmode="group",
-    title=f"Средний балл по предметам — {sem_for_subjects}",
-)
-fig3.update_layout(height=500)
-st.plotly_chart(fig3, use_container_width=True)
-st.dataframe(subj_means, use_container_width=True)
+# Определяем список предметов ИМЕННО этого семестра:
+# берём все колонки df_sem и выкидываем служебные.
+SERVICE_COLS = {"Группа", "№", "ФИО", "stud_id", "Сумма", "Семестр"}
+subjects_this_sem = [
+    c for c in df_sem.columns
+    if c not in SERVICE_COLS
+]
+
+# Оставляем только те, где есть хоть одно числовое значение
+subjects_this_sem = [
+    c for c in subjects_this_sem
+    if df_sem[c].notna().any()
+]
+
+if not subjects_this_sem:
+    st.info(f"В {sem_for_subjects} нет данных по предметам.")
+else:
+    subj_means = (
+        df_sem.groupby("Группа")[subjects_this_sem]
+        .mean()
+        .round(2)
+        .reset_index()
+    )
+
+    fig3 = px.bar(
+        subj_means.melt(id_vars="Группа", var_name="Предмет",
+                        value_name="Средний балл"),
+        x="Предмет", y="Средний балл", color="Группа",
+        barmode="group",
+        title=f"Средний балл по предметам — {sem_for_subjects}",
+    )
+    fig3.update_layout(height=500)
+    st.plotly_chart(fig3, use_container_width=True)
+    st.dataframe(subj_means, use_container_width=True)
+
+    # Расшифровка предметов именно для этого семестра
+    # (subject_meta собиралась для первой группы/семестра — она может не совпадать)
+    with st.expander("ℹ️ Расшифровка предметов этого семестра"):
+        # Пытаемся найти расшифровки в общем subject_meta по совпадению short
+        meta_by_short = {s["short"]: s["full"] for s in (subject_meta or [])}
+        for short in subjects_this_sem:
+            full = meta_by_short.get(short, "")
+            st.write(f"**{short}** — {full}" if full else f"**{short}**")
 
 
 # ------------------------------------------------------------
