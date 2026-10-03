@@ -4,28 +4,21 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from bs4 import BeautifulSoup
-
 import parser as p
 
-st.set_page_config(page_title="БРС СПбГЭУ — сравнение групп", layout="wide")
-st.title("📊 Сравнение успеваемости групп — БРС СПбГЭУ")
+st.set_page_config(page_title="БРС СПбГЭУ", layout="wide")
+st.title("📊 Этап 1 — Сравнение групп внутри направления")
 
 
-# ============================================================
-# ГОДЫ
-# ============================================================
 YEARS = {
     "2026 (1 курс)": "2026",
     "2025 (2 курс)": "2025",
     "2024 (3 курс)": "2024",
     "2023 (4 курс)": "2023",
 }
-# ============================================================
 
 
-# ------------------------------------------------------------
 # Утилиты
-# ------------------------------------------------------------
 def filters_of(html: str):
     soup = BeautifulSoup(html, "html.parser")
     return [li.find("b").get_text(strip=True)
@@ -43,16 +36,12 @@ def try_fetch(params_list):
     return None, None
 
 
-# ------------------------------------------------------------
-# 1. Селектбокс «Курс»
-# ------------------------------------------------------------
+# Селектбокс «Курс»
 year_label = st.selectbox("Курс", list(YEARS.keys()))
 year = YEARS[year_label]
 
 
-# ------------------------------------------------------------
-# 2. Все направления выбранного года (up=none)
-# ------------------------------------------------------------
+# Все направления выбранного года (up=none)
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_directions_for_year(year: str):
     params = {
@@ -71,14 +60,8 @@ def load_directions_for_year(year: str):
 with st.spinner(f"Загружаем направления за {year_label}…"):
     html_year, used_year, directions = load_directions_for_year(year)
 
-if not directions:
-    st.warning(f"Не удалось получить направления за {year_label}.")
-    st.stop()
 
-
-# ------------------------------------------------------------
-# 3. Селектбокс «Направление»
-# ------------------------------------------------------------
+# Селектбокс «Направление»
 dir_labels = [o.label for o in directions]
 direction_label = st.selectbox("Направление", dir_labels)
 direction_opt = directions[dir_labels.index(direction_label)]
@@ -90,9 +73,7 @@ with st.expander("🔍 Отладка: год → направления", expan
     st.write("up выбранного направления:", up_id)
 
 
-# ------------------------------------------------------------
-# 4. Группы И семестры выбранного направления
-# ------------------------------------------------------------
+# Группы и семестры выбранного направления
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_groups_and_sems(up_id: str, year: str):
     params = {
@@ -112,30 +93,22 @@ def load_groups_and_sems(up_id: str, year: str):
     return html, used, groups, sems
 
 
-with st.spinner("Загружаем группы и семестры…"):
+with st.spinner("Загрузка групп и семестров"):
     html_g, used_g, groups, sems = load_groups_and_sems(up_id, year)
 
-if not groups:
-    st.warning("Для выбранного направления и года нет групп.")
-    st.stop()
 
 group_options = {o.label: o for o in groups}
 group_names = list(group_options.keys())
 st.info(f"Найдено групп: **{len(group_names)}** — {', '.join(group_names)}")
 
-if not sems:
-    st.warning("Сайт не вернул список семестров для выбранного направления.")
-    st.stop()
 
-# Список семестров + текущий по умолчанию
+# Список семестров + текущий семестр по умолчанию
 sem_labels = [o.label for o in sems]
 current_sem = p.get_selected_text(html_g, "Семестр")
 default_sem = [current_sem] if current_sem in sem_labels else sem_labels[-1:]
 
 
-# ------------------------------------------------------------
-# 5. Мультиселекты групп и семестров
-# ------------------------------------------------------------
+# Мультиселекты групп и семестров
 col_g, col_s = st.columns(2)
 
 with col_g:
@@ -150,7 +123,7 @@ with col_s:
         "Семестры",
         options=sem_labels,
         default=default_sem,
-        help="Можно выбрать несколько — тогда данные будут собраны по каждому семестру.",
+        help="Можно выбрать несколько.",
     )
 
 if not selected_groups:
@@ -161,9 +134,7 @@ if not selected_sems:
     st.stop()
 
 
-# ------------------------------------------------------------
-# 6. Скачиваем данные: для каждой группы × каждого семестра
-# ------------------------------------------------------------
+# Скачиваем данные: для каждой группы и каждого семестра
 sem_options = {o.label: o for o in sems}
 
 
@@ -208,10 +179,6 @@ for gname in selected_groups:
 
 progress.empty()
 
-if not all_rows or subject_meta is None:
-    st.error("Данные не получены.")
-    st.stop()
-
 df = pd.DataFrame(all_rows)
 subject_shorts = [s["short"] for s in subject_meta]
 
@@ -220,9 +187,7 @@ for col in subject_shorts + ["Сумма"]:
         df[col] = pd.to_numeric(df[col].replace("", pd.NA), errors="coerce")
 
 
-# ------------------------------------------------------------
-# 7. Сводка по (семестр, группа)
-# ------------------------------------------------------------
+# Сводка по (семестр, группа)
 st.subheader("Сводка по семестрам и группам")
 
 summary = (
@@ -241,9 +206,7 @@ summary = (
 st.dataframe(summary, use_container_width=True)
 
 
-# ------------------------------------------------------------
-# 8. Графики
-# ------------------------------------------------------------
+# Графики
 col_a, col_b = st.columns(2)
 
 with col_a:
@@ -277,9 +240,7 @@ if len(selected_sems) > 1:
     st.plotly_chart(fig_dyn, use_container_width=True)
 
 
-# ------------------------------------------------------------
-# 9. Сравнение по предметам
-# ------------------------------------------------------------
+# Сравнение по предметам
 st.subheader("Средний балл по предметам")
 
 sem_for_subjects = st.selectbox(
@@ -293,8 +254,8 @@ df_sem = df[df["Семестр"] == sem_for_subjects].copy()
 # Служебные колонки, которые не являются предметами
 SERVICE_COLS = {"Группа", "№", "ФИО", "stud_id", "Сумма", "Семестр"}
 
-# Приводим к числам ВСЕ колонки df_sem, кроме служебных.
-# Пустые/нечисловые значения станут NaN и не помешают mean().
+# Приводим к числам все колонки df_sem, кроме служебных
+# Пустые значения станут NaN и не помешают mean()
 subject_candidates = [c for c in df_sem.columns if c not in SERVICE_COLS]
 
 for c in subject_candidates:
@@ -324,36 +285,11 @@ else:
     st.plotly_chart(fig3, use_container_width=True)
     st.dataframe(subj_means, use_container_width=True)
 
-    with st.expander("ℹ️ Расшифровка предметов этого семестра"):
+    with st.expander("ℹ️ Расшифровка предметов выбранного семестра"):
         meta_by_short = {s["short"]: s["full"] for s in (subject_meta or [])}
         for short in subjects_this_sem:
             full = meta_by_short.get(short, "")
             st.write(f"**{short}** — {full}" if full else f"**{short}**")
-            
-# ------------------------------------------------------------
-# 10. Полная таблица и экспорт
-# ------------------------------------------------------------
+
 with st.expander("📋 Полная таблица студентов"):
     st.dataframe(df, use_container_width=True)
-
-st.subheader("Экспорт")
-col_x, col_y = st.columns(2)
-
-with col_x:
-    csv_bytes = df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        "⬇️ Скачать студентов (CSV)",
-        data=csv_bytes, file_name="students_compare.csv", mime="text/csv",
-    )
-
-with col_y:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Студенты", index=False)
-        summary.to_excel(writer, sheet_name="Сводка", index=False)
-        subj_means.to_excel(writer, sheet_name="По предметам", index=False)
-    st.download_button(
-        "⬇️ Скачать Excel (3 листа)",
-        data=buf.getvalue(), file_name="students_compare.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
