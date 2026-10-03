@@ -15,9 +15,8 @@ import parser as p
 DEFAULT_DIRECTION_SUBSTR = "прикладная математика"
 DEFAULT_GROUPS_COUNT = 2
 
-# Год, от которого считаем «курс» (текущий учебный год)
+# Текущий учебный год — от него считаем «курс»
 CURRENT_ACADEMIC_YEAR = 2026
-
 # ============================================================
 
 st.set_page_config(page_title="БРС СПбГЭУ — сравнение групп", layout="wide")
@@ -48,7 +47,7 @@ def fetch_with_fallback(params_dict):
 
 
 def course_from_group(group_name: str):
-    """ПМ-2301 → 4 (если сейчас 2026/2027). Возвращает None, если не распарсилось."""
+    """ПМ-2301 → 4 (если сейчас 2026/2027). None, если не распарсилось."""
     m = re.match(r"[A-Za-zА-Яа-я]+-(\d{2})\d{2}", group_name)
     if not m:
         return None
@@ -82,7 +81,7 @@ if not all_directions:
     st.error("Сайт не вернул список направлений. Попробуйте позже.")
     st.stop()
 
-# Группируем по «нормализованному» имени — под одним именем соберём все up-ы
+# Группируем по «нормализованному» имени — под одним именем все up-ы
 directions_grouped: dict[str, list] = {}
 for o in all_directions:
     key = normalize_direction_name(o.label)
@@ -109,91 +108,158 @@ with st.expander("🔍 Отладка: up-ы выбранного направл
     for o in direction_variants:
         st.write(
             f"up=`{o.params.get('up','?')}` "
-            f"y=`{o.params.get('y','?')}` — {o.label}"
+            f"y=`{o.params.get('y','?')}` "
+            f"k=`{o.params.get('k','?')}` "
+            f"f=`{o.params.get('f','?')}` — {o.label}"
         )
 
 
 # ------------------------------------------------------------
-# 3. Собираем все группы по всем up-ам направления
+# 3. Универсальный сбор групп по одному up
 # ------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_groups_for_up(up_id: str):
-    params = {
+def fetch_groups_for_up(up_id: str, year, k: str, f: str):
+    """
+    Пробуем много вариантов запроса. Возвращаем:
+      (html, used_params, filters_list, groups_list)
+    """
+    base = {
         "up":   up_id,
-        "k":    "1",
-        "f":    "1",
-        "g":    "all",
+        "k":    k or "1",
+        "f":    f or "1",
         "upp":  "all",
         "sort": "fio",
         "ball": "hide",
     }
-    html, used = fetch_with_fallback(params)
-    return html, used
+
+    variants = []
+
+    # 1) с y + g=all
+    if year:
+        v = dict(base); v["y"] = year; v["g"] = "all"; variants.append(v)
+        # 2) с y без g
+        variants.append(dict(base, y=year))
+    # 3) без y + g=all
+    v = dict(base); v["g"] = "all"; variants.append(v)
+    # 4) без y без g
+    variants.append(dict(base))
+    # 5) с y + s=1..8 + g=all
+    if year:
+        for s in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            variants.append(dict(base, y=year, s=s, g="all"))
+    # 6) без y + s=1..8 + g=all
+    for s in ("1", "2", "3", "4", "5", "6", "7", "8"):
+        variants.append(dict(base, s=s, g="all"))
+
+    for v in variants:
+        try:
+            html = p.fetch(v)
+        except Exception:
+            continue
+        filters = collect_filters(html)
+        if "Группа" in filters:
+            groups = [
+                o.label for o in p.get_filter_options(html, "Группа")
+                if o.label not in ("Не выбрано", "Все группы")
+            ]
+            if groups:
+                return html, v, filters, groups
+
+    # Ничего не сработало — вернём последний ответ для диагностики
+    try:
+        html = p.fetch(variants[-1])
+        filters = collect_filters(html)
+    except Exception:
+        html, filters = None, []
+    return None, None, filters, []
 
 
-# Собираем группы: словарь {group_name: {"g":..., "up":..., "y":...}}
-all_groups = {}
+# Собираем группы по всем up-ам направления
+all_groups: dict[str, dict] = {}
 group_debug = []
 
 progress = st.progress(0.0, text="Собираем группы по всем годам…")
 for i, up_opt in enumerate(direction_variants):
     up_id = up_opt.params.get("up")
+    year = up_opt.params.get("y")
+    if not year:
+        m = re.search(r"\b(20\d{2})\b", up_opt.label)
+        if m:
+            year = m.group(1)
+    k = up_opt.params.get("k", "1")
+    f = up_opt.params.get("f", "1")
+
     progress.progress((i + 1) / len(direction_variants),
                       text=f"up={up_id}…")
-    try:
-        html_up, used_up = fetch_groups_for_up(up_id)
-    except Exception as e:
-        group_debug.append((up_id, f"ошибка: {e}"))
+
+    html_up, used_up, filters, names = fetch_groups_for_up(up_id, year, k, f)
+
+    url = None
+    if used_up:
+        url = requests.Request("GET", p.BASE, params=used_up).prepare().url
+
+    group_debug.append({
+        "up": up_id,
+        "year": year,
+        "url": url,
+        "filters": filters,
+        "groups": names,
+    })
+
+    if not names:
         continue
 
-    if html_up is None:
-        group_debug.append((up_id, "нет фильтра «Группа»"))
-        continue
-
-    opts = p.get_filter_options(html_up, "Группа")
-    names = [o.label for o in opts if o.label not in ("Не выбрано", "Все группы")]
-    group_debug.append((up_id, names))
-
-    for o in opts:
-        if o.label in ("Не выбрано", "Все группы"):
+    for name in names:
+        # найдём опцию, чтобы взять её g
+        opt = next(
+            (o for o in p.get_filter_options(html_up, "Группа") if o.label == name),
+            None,
+        )
+        if opt is None:
             continue
-        if o.label not in all_groups:
-            all_groups[o.label] = {
-                "g":  o.params.get("g"),
-                "up": up_id,
-                "y":  o.params.get("y") or up_opt.params.get("y"),
-            }
+        all_groups.setdefault(name, {
+            "g":  opt.params.get("g"),
+            "up": up_id,
+            "y":  year,
+            "k":  k,
+            "f":  f,
+        })
 
     time.sleep(0.3)
 
 progress.empty()
 
-with st.expander("🔍 Отладка: какие группы вернул каждый up"):
-    for up_id, result in group_debug:
-        st.write(f"up={up_id}: {result}")
+with st.expander("🔍 Отладка: что вернул каждый up", expanded=True):
+    for info in group_debug:
+        st.markdown(f"**up={info['up']}** (year={info['year']})")
+        if info["url"]:
+            st.code(info["url"], language="text")
+        st.write("Фильтры:", info["filters"])
+        st.write("Группы:", info["groups"] or "—")
 
 if not all_groups:
     st.error(
-        "Не удалось собрать ни одной группы. Скорее всего, сайт не отдаёт "
-        "g=all ни для одного года этого направления. Пришлите содержимое "
-        "отладочной панели — подберём другой способ."
+        "Не удалось собрать ни одной группы. Смотрите отладочную панель — "
+        "там видно, какие фильтры и URL вернул сайт для каждого up."
     )
     st.stop()
-
-# Сортируем группы: по курсу (убывание), затем по имени
-def sort_key(name):
-    course = course_from_group(name) or 99
-    return (-course, name)
-
-group_names_all = sorted(all_groups.keys(), key=sort_key)
-
-st.success(f"Найдено групп: **{len(group_names_all)}** — "
-           f"{', '.join(group_names_all)}")
 
 
 # ------------------------------------------------------------
 # 4. Мультиселект групп
 # ------------------------------------------------------------
+def sort_key(name):
+    course = course_from_group(name) or 99
+    return (-course, name)
+
+
+group_names_all = sorted(all_groups.keys(), key=sort_key)
+
+st.success(
+    f"Найдено групп: **{len(group_names_all)}** — "
+    f"{', '.join(group_names_all)}"
+)
+
 selected_groups = st.multiselect(
     "Группы для сравнения",
     options=group_names_all,
@@ -204,7 +270,6 @@ if not selected_groups:
     st.warning("Выберите хотя бы одну группу.")
     st.stop()
 
-# Информация о курсах выбранных групп
 courses_info = []
 for gname in selected_groups:
     c = course_from_group(gname)
@@ -218,12 +283,11 @@ st.caption(" | ".join(courses_info))
 first_group = selected_groups[0]
 fg = all_groups[first_group]
 
-# Запрос по конкретной группе (без s) — сайт покажет доступные семестры
 params_for_sem = {
     "up":   fg["up"],
     "y":    fg["y"],
-    "k":    "1",
-    "f":    "1",
+    "k":    fg["k"],
+    "f":    fg["f"],
     "g":    fg["g"],
     "upp":  "all",
     "sort": "fio",
@@ -275,6 +339,8 @@ for gname in selected_groups:
         step += 1
         progress.progress(step / total, text=f"{gname} / {sem_label}")
 
+        # семестр: id берём из опции, если она есть,
+        # но у разных групп нумерация семестров совпадает
         sem_opt = next((o for o in semester_options if o.label == sem_label), None)
         if not sem_opt:
             continue
@@ -283,8 +349,8 @@ for gname in selected_groups:
         params_g = {
             "up":   ginfo["up"],
             "y":    ginfo["y"],
-            "k":    "1",
-            "f":    "1",
+            "k":    ginfo["k"],
+            "f":    ginfo["f"],
             "g":    ginfo["g"],
             "s":    s_id,
             "upp":  "all",
