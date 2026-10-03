@@ -414,32 +414,6 @@ st.plotly_chart(fig_radar, use_container_width=True)
 
 
 # ------------------------------------------------------------
-# 9. Топ-3 обгон / отставание
-# ------------------------------------------------------------
-st.subheader("Где я сильнее и где слабее")
-diff_only = cmp_df.dropna(subset=["Разница"])
-diff_only = diff_only[diff_only["Разница"] != 0]
-
-col_a, col_b = st.columns(2)
-with col_a:
-    st.markdown("**Топ-3, где я обгоняю**")
-    top = diff_only.sort_values("Разница", ascending=False).head(3)
-    if top.empty:
-        st.write("Нет данных.")
-    else:
-        for _, r in top.iterrows():
-            st.write(f"✅ **{r['Предмет (мой)']}** — я {r['Мой балл']}, он {r['Его балл']} (Δ +{r['Разница']:.2f})")
-with col_b:
-    st.markdown("**Топ-3, где я отстаю**")
-    top = diff_only.sort_values("Разница").head(3)
-    if top.empty:
-        st.write("Нет данных.")
-    else:
-        for _, r in top.iterrows():
-            st.write(f"⚠️ **{r['Предмет (мой)']}** — я {r['Мой балл']}, он {r['Его балл']} (Δ {r['Разница']:.2f})")
-
-
-# ------------------------------------------------------------
 # 10. Экспорт
 # ------------------------------------------------------------
 st.subheader("Экспорт")
