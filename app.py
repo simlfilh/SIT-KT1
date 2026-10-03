@@ -1,72 +1,37 @@
-import io
-import re
-import time
-import requests
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from bs4 import BeautifulSoup
 
 import parser as p
 
-# ============================================================
-# НАСТРОЙКИ
-# ============================================================
-DEFAULT_DIRECTION_SUBSTR = "прикладная математика"
-DEFAULT_GROUPS_COUNT = 2
-
-# Текущий учебный год — от него считаем «курс»
-CURRENT_ACADEMIC_YEAR = 2026
-# ============================================================
-
-st.set_page_config(page_title="БРС СПбГЭУ — сравнение групп", layout="wide")
-st.title("📊 Сравнение успеваемости групп — БРС СПбГЭУ")
+st.set_page_config(page_title="БРС СПбГЭУ — группы и баллы", layout="wide")
+st.title("📋 Группы и баллы по предметам")
 
 
 # ------------------------------------------------------------
 # Утилиты
 # ------------------------------------------------------------
-def collect_filters(html: str):
+def filters_of(html: str):
+    from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     return [li.find("b").get_text(strip=True)
             for li in soup.select("div.filter > ul > li")
             if li.find("b")]
 
 
-def fetch_with_fallback(params_dict):
-    """Пробуем с g=all, потом без g. Возвращаем (html, рабочие_params)."""
-    for variant in (params_dict,
-                    {k: v for k, v in params_dict.items() if k != "g"}):
+def try_fetch(params_list):
+    """Возвращает первый HTML, в котором есть фильтр «Группа»."""
+    for params in params_list:
         try:
-            html = p.fetch(variant)
+            html = p.fetch(params)
         except Exception:
             continue
-        if "Группа" in collect_filters(html):
-            return html, variant
+        if "Группа" in filters_of(html):
+            return html, params
     return None, None
 
 
-def course_from_group(group_name: str):
-    """ПМ-2301 → 4 (если сейчас 2026/2027). None, если не распарсилось."""
-    m = re.match(r"[A-Za-zА-Яа-я]+-(\d{2})\d{2}", group_name)
-    if not m:
-        return None
-    year_short = int(m.group(1))
-    year = 2000 + year_short
-    course = CURRENT_ACADEMIC_YEAR - year + 1
-    return course if 1 <= course <= 6 else None
-
-
-def normalize_direction_name(label: str) -> str:
-    """Убираем год и форму, чтобы сгруппировать направления одного типа."""
-    s = label
-    s = re.sub(r"\s*\(\s*(очная|очно-заочная|заочная)\s*\)", "", s, flags=re.I)
-    s = re.sub(r"\s*\b20\d{2}\b\s*$", "", s)
-    return s.strip()
-
-
 # ------------------------------------------------------------
-# 1. Базовая страница — список направлений
+# 1. Список направлений
 # ------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_base_html():
@@ -74,399 +39,172 @@ def load_base_html():
 
 
 base_html = load_base_html()
-all_directions = p.get_filter_options(base_html, "Направление")
-all_directions = [o for o in all_directions if "up" in o.params]
+directions = [o for o in p.get_filter_options(base_html, "Направление")
+              if "up" in o.params]
 
-if not all_directions:
+if not directions:
     st.error("Сайт не вернул список направлений. Попробуйте позже.")
     st.stop()
-
-# Группируем по «нормализованному» имени — под одним именем все up-ы
-directions_grouped: dict[str, list] = {}
-for o in all_directions:
-    key = normalize_direction_name(o.label)
-    directions_grouped.setdefault(key, []).append(o)
-
-direction_names = list(directions_grouped.keys())
 
 
 # ------------------------------------------------------------
 # 2. Селектбокс «Направление»
 # ------------------------------------------------------------
-default_dir_idx = 0
-for i, name in enumerate(direction_names):
-    if DEFAULT_DIRECTION_SUBSTR in name.lower():
-        default_dir_idx = i
-        break
-
-direction_label = st.selectbox(
-    "Направление", direction_names, index=default_dir_idx,
-)
-direction_variants = directions_grouped[direction_label]
-
-with st.expander("🔍 Отладка: up-ы выбранного направления"):
-    for o in direction_variants:
-        st.write(
-            f"up=`{o.params.get('up','?')}` "
-            f"y=`{o.params.get('y','?')}` "
-            f"k=`{o.params.get('k','?')}` "
-            f"f=`{o.params.get('f','?')}` — {o.label}"
-        )
+dir_labels = [o.label for o in directions]
+direction_label = st.selectbox("Направление", dir_labels)
+direction_opt = directions[dir_labels.index(direction_label)]
+up_id = direction_opt.params["up"]
 
 
 # ------------------------------------------------------------
-# 3. Универсальный сбор групп по одному up
+# 3. Список годов / курсов для выбранного направления
 # ------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_groups_for_up(up_id: str, year, k: str, f: str):
-    """
-    Пробуем много вариантов запроса. Возвращаем:
-      (html, used_params, filters_list, groups_list)
-    """
-    base = {
-        "up":   up_id,
-        "k":    k or "1",
-        "f":    f or "1",
-        "upp":  "all",
-        "sort": "fio",
-        "ball": "hide",
-    }
-
-    variants = []
-
-    # 1) с y + g=all
-    if year:
-        v = dict(base); v["y"] = year; v["g"] = "all"; variants.append(v)
-        # 2) с y без g
-        variants.append(dict(base, y=year))
-    # 3) без y + g=all
-    v = dict(base); v["g"] = "all"; variants.append(v)
-    # 4) без y без g
-    variants.append(dict(base))
-    # 5) с y + s=1..8 + g=all
-    if year:
-        for s in ("1", "2", "3", "4", "5", "6", "7", "8"):
-            variants.append(dict(base, y=year, s=s, g="all"))
-    # 6) без y + s=1..8 + g=all
-    for s in ("1", "2", "3", "4", "5", "6", "7", "8"):
-        variants.append(dict(base, s=s, g="all"))
-
-    for v in variants:
-        try:
-            html = p.fetch(v)
-        except Exception:
-            continue
-        filters = collect_filters(html)
-        if "Группа" in filters:
-            groups = [
-                o.label for o in p.get_filter_options(html, "Группа")
-                if o.label not in ("Не выбрано", "Все группы")
-            ]
-            if groups:
-                return html, v, filters, groups
-
-    # Ничего не сработало — вернём последний ответ для диагностики
-    try:
-        html = p.fetch(variants[-1])
-        filters = collect_filters(html)
-    except Exception:
-        html, filters = None, []
-    return None, None, filters, []
+def load_courses_for_up(up_id: str):
+    """Делаем запрос по up с g=all и достаём фильтр «Курс»."""
+    html, used = try_fetch([
+        {"up": up_id, "g": "all", "upp": "all", "sort": "fio", "ball": "hide"},
+        {"up": up_id, "upp": "all", "sort": "fio", "ball": "hide"},
+    ])
+    if html is None:
+        return None, None, []
+    courses = p.get_filter_options(html, "Курс")
+    return html, used, courses
 
 
-# Собираем группы по всем up-ам направления
-all_groups: dict[str, dict] = {}
-group_debug = []
+with st.spinner("Загружаем список курсов…"):
+    html_dir, used_dir, courses = load_courses_for_up(up_id)
 
-progress = st.progress(0.0, text="Собираем группы по всем годам…")
-for i, up_opt in enumerate(direction_variants):
-    up_id = up_opt.params.get("up")
-    year = up_opt.params.get("y")
-    if not year:
-        m = re.search(r"\b(20\d{2})\b", up_opt.label)
-        if m:
-            year = m.group(1)
-    k = up_opt.params.get("k", "1")
-    f = up_opt.params.get("f", "1")
-
-    progress.progress((i + 1) / len(direction_variants),
-                      text=f"up={up_id}…")
-
-    html_up, used_up, filters, names = fetch_groups_for_up(up_id, year, k, f)
-
-    url = None
-    if used_up:
-        url = requests.Request("GET", p.BASE, params=used_up).prepare().url
-
-    group_debug.append({
-        "up": up_id,
-        "year": year,
-        "url": url,
-        "filters": filters,
-        "groups": names,
-    })
-
-    if not names:
-        continue
-
-    for name in names:
-        # найдём опцию, чтобы взять её g
-        opt = next(
-            (o for o in p.get_filter_options(html_up, "Группа") if o.label == name),
-            None,
-        )
-        if opt is None:
-            continue
-        all_groups.setdefault(name, {
-            "g":  opt.params.get("g"),
-            "up": up_id,
-            "y":  year,
-            "k":  k,
-            "f":  f,
-        })
-
-    time.sleep(0.3)
-
-progress.empty()
-
-with st.expander("🔍 Отладка: что вернул каждый up", expanded=True):
-    for info in group_debug:
-        st.markdown(f"**up={info['up']}** (year={info['year']})")
-        if info["url"]:
-            st.code(info["url"], language="text")
-        st.write("Фильтры:", info["filters"])
-        st.write("Группы:", info["groups"] or "—")
-
-if not all_groups:
+if html_dir is None:
     st.error(
-        "Не удалось собрать ни одной группы. Смотрите отладочную панель — "
-        "там видно, какие фильтры и URL вернул сайт для каждого up."
+        f"Сайт не отдал страницу для направления «{direction_label}». "
+        f"Возможно, рейтинг для него сейчас не ведётся."
     )
     st.stop()
 
-
-# ------------------------------------------------------------
-# 4. Мультиселект групп
-# ------------------------------------------------------------
-def sort_key(name):
-    course = course_from_group(name) or 99
-    return (-course, name)
-
-
-group_names_all = sorted(all_groups.keys(), key=sort_key)
-
-st.success(
-    f"Найдено групп: **{len(group_names_all)}** — "
-    f"{', '.join(group_names_all)}"
-)
-
-selected_groups = st.multiselect(
-    "Группы для сравнения",
-    options=group_names_all,
-    default=group_names_all[:DEFAULT_GROUPS_COUNT],
-)
-
-if not selected_groups:
-    st.warning("Выберите хотя бы одну группу.")
+if not courses:
+    st.warning("Для этого направления не нашлось доступных курсов.")
     st.stop()
 
-courses_info = []
-for gname in selected_groups:
-    c = course_from_group(gname)
-    courses_info.append(f"{gname} → {c} курс" if c else f"{gname} → курс не определён")
-st.caption(" | ".join(courses_info))
+course_labels = [o.label for o in courses]
+course_label = st.selectbox("Год поступления / курс", course_labels)
+course_opt = courses[course_labels.index(course_label)]
+
+with st.expander("🔍 Отладка: направление → курсы"):
+    st.write("up:", up_id)
+    st.write("Сработавшие параметры:", used_dir)
+    st.write("Все курсы:", course_labels)
+    st.write("Параметры выбранного курса:", course_opt.params)
 
 
 # ------------------------------------------------------------
-# 5. Семестры: берём из ответа по первой выбранной группе
+# 4. Список групп для выбранного курса
 # ------------------------------------------------------------
-first_group = selected_groups[0]
-fg = all_groups[first_group]
+# Параметры: up + y (из course_opt) + g=all
+course_params = dict(course_opt.params)
+course_params["up"] = up_id
+course_params["upp"] = "all"
+course_params["sort"] = "fio"
+course_params["ball"] = "hide"
 
-params_for_sem = {
-    "up":   fg["up"],
-    "y":    fg["y"],
-    "k":    fg["k"],
-    "f":    fg["f"],
-    "g":    fg["g"],
-    "upp":  "all",
-    "sort": "fio",
-    "ball": "hide",
-}
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_groups_for_course(params_tuple):
+    params = dict(params_tuple)
+    html, used = try_fetch([
+        {**params, "g": "all"},
+        params,
+    ])
+    if html is None:
+        return None, None, []
+    groups = [o for o in p.get_filter_options(html, "Группа")
+              if o.label not in ("Не выбрано", "Все группы")]
+    return html, used, groups
 
-html_sem, used_sem = fetch_with_fallback(params_for_sem)
-if html_sem is None:
-    st.error(f"Не удалось получить страницу для группы {first_group}.")
+
+with st.spinner("Загружаем список групп…"):
+    html_c, used_c, groups = load_groups_for_course(
+        tuple(sorted(course_params.items()))
+    )
+
+if html_c is None or not groups:
+    st.warning(
+        "Для выбранного курса сайт не вернул список групп. "
+        "Попробуйте другой курс."
+    )
     st.stop()
 
-semester_options = p.get_filter_options(html_sem, "Семестр")
-current_sem = p.get_selected_text(html_sem, "Семестр")
+group_labels = [o.label for o in groups]
+group_label = st.selectbox("Группа", group_labels)
+group_opt = groups[group_labels.index(group_label)]
 
-with st.expander("🔍 Отладка: семестры выбранной группы", expanded=False):
-    st.write("Параметры:", used_sem)
-    st.write("Фильтры:", collect_filters(html_sem))
-    st.write("Доступные семестры:", [o.label for o in semester_options])
-    st.write("Текущий:", current_sem)
-
-sem_labels = [o.label for o in semester_options]
-default_sem = [current_sem] if current_sem in sem_labels else (sem_labels[-1:] if sem_labels else [])
-
-selected_sems = st.multiselect(
-    "Семестры",
-    options=sem_labels,
-    default=default_sem,
-    help="Список семестров определяется первой выбранной группой.",
-)
-
-if not selected_sems:
-    st.warning("Выберите хотя бы один семестр.")
-    st.stop()
+with st.expander("🔍 Отладка: курс → группы"):
+    st.write("Параметры курса:", course_params)
+    st.write("Все группы:", group_labels)
+    st.write("Параметры выбранной группы:", group_opt.params)
 
 
 # ------------------------------------------------------------
-# 6. Скачиваем данные: группы × семестры
+# 5. Загружаем данные группы
 # ------------------------------------------------------------
-total = len(selected_groups) * len(selected_sems)
-progress = st.progress(0.0, text="Загружаем данные…")
-step = 0
+# Собираем финальные параметры: up, y, g + сортировка/отображение
+final_params = dict(course_params)
+final_params.update(group_opt.params)   # здесь будет правильный g
+final_params["up"]   = up_id
+final_params["upp"]  = "all"
+final_params["sort"] = "fio"
+final_params["ball"] = "hide"
 
-all_rows = []
-subject_meta = None
+@st.cache_data(ttl=600, show_spinner=False)
+def load_group_html(params_tuple):
+    return p.fetch(dict(params_tuple))
 
-for gname in selected_groups:
-    ginfo = all_groups[gname]
-    for sem_label in selected_sems:
-        step += 1
-        progress.progress(step / total, text=f"{gname} / {sem_label}")
 
-        # семестр: id берём из опции, если она есть,
-        # но у разных групп нумерация семестров совпадает
-        sem_opt = next((o for o in semester_options if o.label == sem_label), None)
-        if not sem_opt:
-            continue
-        s_id = sem_opt.params.get("s")
+with st.spinner(f"Загружаем данные {group_label}…"):
+    try:
+        html_g = load_group_html(tuple(sorted(final_params.items())))
+    except Exception as e:
+        st.error(f"Ошибка загрузки: {e}")
+        st.stop()
 
-        params_g = {
-            "up":   ginfo["up"],
-            "y":    ginfo["y"],
-            "k":    ginfo["k"],
-            "f":    ginfo["f"],
-            "g":    ginfo["g"],
-            "s":    s_id,
-            "upp":  "all",
-            "sort": "fio",
-            "ball": "hide",
-        }
 
-        try:
-            html_g = p.fetch(params_g)
-        except Exception as e:
-            st.warning(f"{gname} / {sem_label}: {e}")
-            continue
+# ------------------------------------------------------------
+# 6. Парсим студентов и баллы
+# ------------------------------------------------------------
+subjects = p.parse_subjects(html_g)
+subject_shorts = [s["short"] for s in subjects]
 
-        if subject_meta is None:
-            subject_meta = p.parse_subjects(html_g)
-
-        rows = p.parse_students(html_g, group_name=gname)
-        for r in rows:
-            r["Семестр"] = sem_label
-        all_rows.extend(rows)
-        time.sleep(0.3)
-
-progress.empty()
-
-if not all_rows or subject_meta is None:
-    st.error("Данные не получены.")
+rows = p.parse_students(html_g, group_name=group_label)
+if not rows:
+    st.warning("Сайт вернул пустую таблицу. Возможно, для группы нет данных.")
     st.stop()
 
-df = pd.DataFrame(all_rows)
-subject_shorts = [s["short"] for s in subject_meta]
+df = pd.DataFrame(rows)
+
 for col in subject_shorts + ["Сумма"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col].replace("", pd.NA), errors="coerce")
 
 
 # ------------------------------------------------------------
-# 7. Сводка
+# 7. Показываем
 # ------------------------------------------------------------
-st.subheader("Сводка по группам и семестрам")
-
-summary = (
-    df.groupby(["Семестр", "Группа"])
-    .agg(
-        Студентов=("ФИО", "count"),
-        Средний_балл=("Сумма", "mean"),
-        Медиана=("Сумма", "median"),
-        Макс=("Сумма", "max"),
-        Мин=("Сумма", "min"),
-    )
-    .round(2)
-    .reset_index()
+st.subheader(f"Группа {group_label}")
+st.caption(
+    f"Направление: {direction_label} | "
+    f"Курс: {course_label} | "
+    f"Предметов: {len(subject_shorts)} | "
+    f"Студентов: {len(df)}"
 )
-st.dataframe(summary, use_container_width=True)
 
+keep = ["№", "ФИО"] + subject_shorts + ["Сумма"]
+keep = [c for c in keep if c in df.columns]
+st.dataframe(df[keep], use_container_width=True, hide_index=True)
 
-# ------------------------------------------------------------
-# 8. Графики
-# ------------------------------------------------------------
-st.subheader("Средний суммарный балл: группы × семестры")
-fig1 = px.bar(
-    summary, x="Группа", y="Средний_балл", color="Семестр",
-    barmode="group", text="Средний_балл",
-)
-fig1.update_traces(textposition="outside")
-fig1.update_layout(height=500)
-st.plotly_chart(fig1, use_container_width=True)
+with st.expander("ℹ️ Расшифровка предметов"):
+    for s in subjects:
+        st.write(f"**{s['short']}** — {s['full']}")
 
-if len(selected_sems) > 1:
-    st.subheader("Динамика по семестрам")
-    fig2 = px.line(
-        summary, x="Семестр", y="Средний_балл", color="Группа",
-        markers=True,
-    )
-    fig2.update_layout(height=450)
-    st.plotly_chart(fig2, use_container_width=True)
-
-
-# ------------------------------------------------------------
-# 9. По предметам
-# ------------------------------------------------------------
-st.subheader("Средний балл по предметам")
-sem_for_subjects = st.selectbox(
-    "Семестр для сравнения по предметам",
-    options=selected_sems,
-    index=len(selected_sems) - 1,
-)
-df_sem = df[df["Семестр"] == sem_for_subjects]
-subj_means = df_sem.groupby("Группа")[subject_shorts].mean().round(2).reset_index()
-fig3 = px.bar(
-    subj_means.melt(id_vars="Группа", var_name="Предмет", value_name="Средний балл"),
-    x="Предмет", y="Средний балл", color="Группа", barmode="group",
-    title=f"Средний балл по предметам — {sem_for_subjects}",
-)
-fig3.update_layout(height=500)
-st.plotly_chart(fig3, use_container_width=True)
-st.dataframe(subj_means, use_container_width=True)
-
-
-# ------------------------------------------------------------
-# 10. Полная таблица и экспорт
-# ------------------------------------------------------------
-with st.expander("📋 Полная таблица студентов"):
-    st.dataframe(df, use_container_width=True)
-
-st.subheader("Экспорт")
-col_x, col_y = st.columns(2)
-with col_x:
-    csv_bytes = df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button("⬇️ Скачать CSV", data=csv_bytes,
-                       file_name="students_compare.csv", mime="text/csv")
-with col_y:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Студенты", index=False)
-        summary.to_excel(writer, sheet_name="Сводка", index=False)
-        subj_means.to_excel(writer, sheet_name="По предметам", index=False)
-    st.download_button("⬇️ Скачать Excel", data=buf.getvalue(),
-                       file_name="students_compare.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+with st.expander("🔍 Отладка: финальный запрос"):
+    st.json(final_params)
+    st.write("Фильтры в ответе:", filters_of(html_g))
+    st.write("Строк в таблице:", len(df))
