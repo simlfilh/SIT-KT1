@@ -6,12 +6,8 @@ from rapidfuzz import fuzz
 
 import parser as p
 
-st.title("🌍 Этап 3 — Сравнение с любым студентом за весь период обучения")
+st.title("📊 Этап 3 — Сравнение с другими направлениями")
 
-
-# ============================================================
-# ГОДЫ
-# ============================================================
 YEARS = {
     "2026 (1 курс)": "2026",
     "2025 (2 курс)": "2025",
@@ -22,9 +18,7 @@ FUZZY_THRESHOLD = 85  # порог схожести названий предм�
 SERVICE_COLS = {"Группа", "№", "ФИО", "stud_id", "Сумма", "Семестр"}
 
 
-# ------------------------------------------------------------
 # Утилиты
-# ------------------------------------------------------------
 def try_fetch(params_list):
     for params in params_list:
         try:
@@ -162,35 +156,31 @@ def match_subjects(meta_a, meta_b, extra_pairs=None):
     return pairs
 
 
+# 1. Выбор «Студента №1»
 # ------------------------------------------------------------
-# 1. Выбор «Я»
-# ------------------------------------------------------------
-st.markdown("### 👤 Я")
+st.markdown("🧑‍🎓 Студент №1")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    my_year_label = st.selectbox("Курс (я)", list(YEARS.keys()), key="s3_my_year")
+    my_year_label = st.selectbox("Курс (студент №1)", list(YEARS.keys()), key="s3_my_year")
     my_year = YEARS[my_year_label]
 
 with col2:
     my_dirs = load_directions_for_year(my_year)
     my_dir_labels = [o.label for o in my_dirs]
-    my_dir_label = st.selectbox("Направление (я)", my_dir_labels, key="s3_my_dir")
+    my_dir_label = st.selectbox("Направление (студент №1)", my_dir_labels, key="s3_my_dir")
     my_dir_opt = my_dirs[my_dir_labels.index(my_dir_label)]
     my_up = my_dir_opt.params["up"]
 
 with col3:
     _, my_groups, my_sems = load_groups_and_sems(my_up, my_year)
-    if not my_groups or not my_sems:
-        st.error("Не удалось получить группы/семестры для «Я».")
-        st.stop()
     my_group_names = [o.label for o in my_groups]
-    my_group_label = st.selectbox("Группа (я)", my_group_names, key="s3_my_group")
+    my_group_label = st.selectbox("Группа (Студент №1)", my_group_names, key="s3_my_group")
 
 my_group_opt = next(o for o in my_groups if o.label == my_group_label)
 my_sem_labels = [o.label for o in my_sems]
-my_sem_label = st.selectbox("Семестр (я)", my_sem_labels,
+my_sem_label = st.selectbox("Семестр (Студент №1)", my_sem_labels,
                             index=len(my_sem_labels) - 1, key="s3_my_sem")
 my_sem_opt = next(o for o in my_sems if o.label == my_sem_label)
 
@@ -200,42 +190,34 @@ with st.spinner("Загружаем мои данные…"):
     )
 
 my_students = df_my["ФИО"].dropna().tolist()
-if not my_students:
-    st.error("В моей группе нет студентов.")
-    st.stop()
-me_name = st.selectbox("Я", my_students, key="s3_me")
+me_name = st.selectbox("Студент №1", my_students, key="s3_me")
 row_me = df_my[df_my["ФИО"] == me_name].iloc[0]
 
 
-# ------------------------------------------------------------
-# 2. Выбор «Он/Она» — любой курс, направление, семестр
-# ------------------------------------------------------------
-st.markdown("### 🌐 С кем сравнить")
+# 2. Выбор для студента №1 — любой курс, направление, семестр
+st.markdown("👤 Студент №2")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    ot_year_label = st.selectbox("Курс (он/она)", list(YEARS.keys()), key="s3_ot_year")
+    ot_year_label = st.selectbox("Курс (Студент №2)", list(YEARS.keys()), key="s3_ot_year")
     ot_year = YEARS[ot_year_label]
 
 with col2:
     ot_dirs = load_directions_for_year(ot_year)
     ot_dir_labels = [o.label for o in ot_dirs]
-    ot_dir_label = st.selectbox("Направление (он/она)", ot_dir_labels, key="s3_ot_dir")
+    ot_dir_label = st.selectbox("Направление (Студент №2)", ot_dir_labels, key="s3_ot_dir")
     ot_dir_opt = ot_dirs[ot_dir_labels.index(ot_dir_label)]
     ot_up = ot_dir_opt.params["up"]
 
 with col3:
     _, ot_groups, ot_sems = load_groups_and_sems(ot_up, ot_year)
-    if not ot_groups or not ot_sems:
-        st.error("Не удалось получить группы/семестры для «Он/Она».")
-        st.stop()
     ot_group_names = [o.label for o in ot_groups]
-    ot_group_label = st.selectbox("Группа (он/она)", ot_group_names, key="s3_ot_group")
+    ot_group_label = st.selectbox("Группа (Студент №2)", ot_group_names, key="s3_ot_group")
 
 ot_group_opt = next(o for o in ot_groups if o.label == ot_group_label)
 ot_sem_labels = [o.label for o in ot_sems]
-ot_sem_label = st.selectbox("Семестр (он/она)", ot_sem_labels,
+ot_sem_label = st.selectbox("Семестр (Студент №2)", ot_sem_labels,
                             index=len(ot_sem_labels) - 1, key="s3_ot_sem")
 ot_sem_opt = next(o for o in ot_sems if o.label == ot_sem_label)
 
@@ -245,18 +227,13 @@ with st.spinner("Загружаем данные однокурсника…"):
     )
 
 ot_students = df_ot["ФИО"].dropna().tolist()
-if not ot_students:
-    st.error("В группе «Он/Она» нет студентов.")
-    st.stop()
 ot_default = next((s for s in ot_students if s != me_name), ot_students[0])
-ot_name = st.selectbox("Он/Она", ot_students,
+ot_name = st.selectbox("Студент №2", ot_students,
                        index=ot_students.index(ot_default), key="s3_ot")
 row_ot = df_ot[df_ot["ФИО"] == ot_name].iloc[0]
 
 
-# ------------------------------------------------------------
-# 3. Сопоставление предметов
-# ------------------------------------------------------------
+# Сопоставление предметов
 pairs = match_subjects(meta_my, meta_ot)
 matched_a = {x[0] for x in pairs}
 matched_b = {x[2] for x in pairs}
@@ -264,8 +241,8 @@ matched_b = {x[2] for x in pairs}
 unmatched_a = [(m["short"], m["full"]) for m in meta_my if m["short"] not in matched_a]
 unmatched_b = [(m["short"], m["full"]) for m in meta_ot if m["short"] not in matched_b]
 
-# --- Ручное переопределение ---
-st.markdown("### 🔧 Ручное сопоставление (если автоматика ошиблась)")
+# Ручное переопределение 
+st.markdown("🔧 Ручное сопоставление (если автоматика ошиблась)")
 
 manual_pairs = []
 with st.expander("Добавить пару вручную", expanded=False):
@@ -274,9 +251,9 @@ with st.expander("Добавить пару вручную", expanded=False):
     if all_a and all_b:
         col_a, col_b = st.columns(2)
         with col_a:
-            man_a = st.selectbox("Мой предмет", all_a, key="s3_man_a")
+            man_a = st.selectbox("Предмет студента №1", all_a, key="s3_man_a")
         with col_b:
-            man_b = st.selectbox("Его предмет", all_b, key="s3_man_b")
+            man_b = st.selectbox("Предмет студента №2", all_b, key="s3_man_b")
         if st.button("Добавить сопоставление"):
             st.session_state.setdefault("s3_manual", [])
             pair = (man_a, man_b)
@@ -299,9 +276,7 @@ if manual_pairs:
     pairs = match_subjects(meta_my, meta_ot, extra_pairs=manual_pairs)
 
 
-# ------------------------------------------------------------
-# 4. Таблица сравнения
-# ------------------------------------------------------------
+# Таблица сравнения
 comparison_rows = []
 for a_short, a_full, b_short, b_full, score, source in pairs:
     my_val = row_me.get(a_short, pd.NA)
@@ -313,7 +288,7 @@ for a_short, a_full, b_short, b_full, score, source in pairs:
     who = "—"
     if my_val is not None and ot_val is not None:
         diff = round(my_val - ot_val, 2)
-        who = "Я" if diff > 0 else ("Он/Она" if diff < 0 else "=")
+        who = "Студент №1" if diff > 0 else ("Студент №2" if diff < 0 else "=")
 
     comparison_rows.append({
         "Предмет (мой)": a_full or a_short,
@@ -333,33 +308,29 @@ if cmp_df.empty:
     st.stop()
 
 
-# ------------------------------------------------------------
-# 5. Сводные метрики
-# ------------------------------------------------------------
+# Сводные метрики для оценки успеваемости
 st.subheader("Сводка")
 
-common = cmp_df.dropna(subset=["Мой балл", "Его балл"])
-my_avg = common["Мой балл"].mean() if len(common) else 0
-ot_avg = common["Его балл"].mean() if len(common) else 0
+common = cmp_df.dropna(subset=["Балл студента №1", "Балл студента №2"])
+my_avg = common["Балл студента №1"].mean() if len(common) else 0
+ot_avg = common["Балл студента №2"].mean() if len(common) else 0
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Сопоставлено предметов", len(cmp_df))
-c2.metric("Мой средний по общим", f"{my_avg:.2f}")
-c3.metric("Его средний по общим", f"{ot_avg:.2f}",
-          delta=f"{my_avg - ot_avg:+.2f} (я − он)")
-c4.metric("Я обгоняю / отстаю",
-          f"{(cmp_df['Кто выше'] == 'Я').sum()} / {(cmp_df['Кто выше'] == 'Он/Она').sum()}")
+c2.metric("Студент №1: Средний по общим", f"{my_avg:.2f}")
+c3.metric("Студент №2: Средний по общим", f"{ot_avg:.2f}",
+          delta=f"{my_avg - ot_avg:+.2f} (Студент №1 − Студент №2)")
+c4.metric("Студент №1: успеваемость выше / успеваемость ниже",
+          f"{(cmp_df['Кто выше'] == 'Студент №1').sum()} / {(cmp_df['Кто выше'] == 'Студент №2').sum()}")
 
 
-# ------------------------------------------------------------
-# 6. Таблица по предметам
-# ------------------------------------------------------------
+# Таблица по предметам
 st.subheader("Сравнение по предметам")
 
 def highlight_row(row):
-    if row["Кто выше"] == "Я":
+    if row["Успеваемость выше"] == "Студент №1":
         return ["background-color: #d4edda"] * len(row)
-    if row["Кто выше"] == "Он/Она":
+    if row["Успеваемость выше"] == "Студент №2":
         return ["background-color: #f8d7da"] * len(row)
     return [""] * len(row)
 
@@ -369,22 +340,20 @@ st.dataframe(
 )
 
 
-# ------------------------------------------------------------
-# 7. График по предметам
-# ------------------------------------------------------------
+# График по предметам
 st.subheader("Баллы по сопоставленным предметам")
 
-labels = cmp_df["Предмет (мой)"].fillna(cmp_df["Предмет (его)"]).tolist()
+labels = cmp_df["Предмет (Студент №1)"].fillna(cmp_df["Предмет (Студент №2)"]).tolist()
 
 fig_bar = go.Figure()
 fig_bar.add_trace(go.Bar(
-    name="Я", x=labels,
-    y=cmp_df["Мой балл"].fillna(0).tolist(),
+    name="Студент №1", x=labels,
+    y=cmp_df["Балл студента №1"].fillna(0).tolist(),
     marker_color="#2E86DE",
 ))
 fig_bar.add_trace(go.Bar(
-    name="Он/Она", x=labels,
-    y=cmp_df["Его балл"].fillna(0).tolist(),
+    name="Студент №2", x=labels,
+    y=cmp_df["Балл студента №2"].fillna(0).tolist(),
     marker_color="#EE5A24",
 ))
 fig_bar.update_layout(
@@ -394,17 +363,15 @@ fig_bar.update_layout(
 st.plotly_chart(fig_bar, use_container_width=True)
 
 
-# ------------------------------------------------------------
-# 8. Radar
-# ------------------------------------------------------------
+# Radar
 fig_radar = go.Figure()
 fig_radar.add_trace(go.Scatterpolar(
-    r=cmp_df["Мой балл"].fillna(0).tolist(),
-    theta=labels, fill="toself", name="Я", line_color="#2E86DE",
+    r=cmp_df["Балл студента №1"].fillna(0).tolist(),
+    theta=labels, fill="toself", name="Студент №1", line_color="#2E86DE",
 ))
 fig_radar.add_trace(go.Scatterpolar(
-    r=cmp_df["Его балл"].fillna(0).tolist(),
-    theta=labels, fill="toself", name="Он/Она", line_color="#EE5A24",
+    r=cmp_df["Балл студента №2"].fillna(0).tolist(),
+    theta=labels, fill="toself", name="Студент №2", line_color="#EE5A24",
 ))
 fig_radar.update_layout(
     polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
@@ -413,27 +380,12 @@ fig_radar.update_layout(
 st.plotly_chart(fig_radar, use_container_width=True)
 
 
-# ------------------------------------------------------------
-# 10. Экспорт
-# ------------------------------------------------------------
-st.subheader("Экспорт")
-csv_bytes = cmp_df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-st.download_button(
-    "⬇️ Скачать сравнение (CSV)",
-    data=csv_bytes,
-    file_name=f"compare_stage3_{me_name}_vs_{ot_name}.csv".replace(" ", "_"),
-    mime="text/csv",
-)
-
-
-# ------------------------------------------------------------
-# 11. Отладка
-# ------------------------------------------------------------
+# Отладка
 with st.expander("🔍 Отладка"):
-    st.write("Я:", me_name, "| группа:", my_group_label, "| семестр:", my_sem_label)
-    st.write("Он/Она:", ot_name, "| группа:", ot_group_label, "| семестр:", ot_sem_label)
-    st.write(f"Мои предметы ({len(meta_my)}):", [m["short"] for m in meta_my])
-    st.write(f"Его предметы ({len(meta_ot)}):", [m["short"] for m in meta_ot])
+    st.write("Студент №1:", me_name, "| группа:", my_group_label, "| семестр:", my_sem_label)
+    st.write("Студент №2:", ot_name, "| группа:", ot_group_label, "| семестр:", ot_sem_label)
+    st.write(f"Предметы студента №1 ({len(meta_my)}):", [m["short"] for m in meta_my])
+    st.write(f"Предметы студента №2 ({len(meta_ot)}):", [m["short"] for m in meta_ot])
     st.write(f"Сопоставлено: {len(cmp_df)} пар")
-    st.write("Несопоставленные у меня:", unmatched_a)
-    st.write("Несопоставленные у него:", unmatched_b)
+    st.write("Несопоставленные у студента №1:", unmatched_a)
+    st.write("Несопоставленные у студента №2:", unmatched_b)
