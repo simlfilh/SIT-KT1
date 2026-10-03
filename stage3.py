@@ -293,8 +293,8 @@ for a_short, a_full, b_short, b_full, score, source in pairs:
     comparison_rows.append({
         "Предмет (Студент №1)": a_full or a_short,
         "Предмет (Студент №2)": b_full or b_short,
-        "Студент №1": my_val,
-        "Студент №2": ot_val,
+        "Балл студента №1": my_val,
+        "Балл студента №2": ot_val,
         "Разница": diff,
         "Кто выше": who,
         "Метод": source,
