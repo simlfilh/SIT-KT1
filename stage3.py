@@ -291,10 +291,10 @@ for a_short, a_full, b_short, b_full, score, source in pairs:
         who = "Студент №1" if diff > 0 else ("Студент №2" if diff < 0 else "=")
 
     comparison_rows.append({
-        "Предмет (мой)": a_full or a_short,
-        "Предмет (его)": b_full or b_short,
-        "Мой балл": my_val,
-        "Его балл": ot_val,
+        "Предмет (Студент №1)": a_full or a_short,
+        "Предмет (Студент №2)": b_full or b_short,
+        "Студент №1": my_val,
+        "Студент №2": ot_val,
         "Разница": diff,
         "Кто выше": who,
         "Метод": source,
